@@ -985,11 +985,11 @@
 			<key>PollAppleHotKeys</key>
 			<false/>
 			<key>ShowPicker</key>
-			<false/>
+			<true/>
 			<key>TakeoffDelay</key>
-			<integer>10000</integer>
-			<key>Timeout</key>
 			<integer>0</integer>
+			<key>Timeout</key>
+			<integer>3</integer>
 		</dict>
 		<key>Debug</key>
 		<dict>
@@ -1122,7 +1122,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth -nvrmnobootscreen amfi_get_out_of_my_way=0x1 amfi=0x80</string>
+				<string>-v keepsyms=1 debug=0x100 -liludbg liludump=60 nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth amfi_get_out_of_my_way=0x1 amfi=0x80</string>
 				<key>csr-active-config</key>
 				<data>
 				QwoAAA==

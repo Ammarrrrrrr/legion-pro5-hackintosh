@@ -6,10 +6,14 @@ The USB stick `1401` (FAT32) boots OpenCore. macOS mounts it at `/Volumes/1401` 
 
 | Problem after a change | Copy this over `config.plist` |
 |---|---|
+| Boot hangs or needs debugging | `config-rgbfix.plist`: same setup with verbose boot and the picker |
 | Wi-Fi broken | `config-identity.plist` (itlwm, then open HeliPort) |
 | Identity or iServices problem | `config-fast-trackpad-gpio.plist` |
 | No desktop at all (graphics) | `config-safe-nvoff.plist`: Safe Mode with the NVIDIA driver off |
 | An older test config | `EFI-backup-oc105-20261008/OC/` on the stick has all of them |
+
+All configs share one USB map. If USB ports misbehave after the RGB port change, copy `rgb/backup/UTBMap-Info.plist.before-rgb-20261008` from the stick over `EFI/OC/Kexts/UTBMap.kext/Contents/Info.plist`.
+If the boot or USB misbehaves after `LegionRGBUSBFix.kext` was added, copy `config-yogasmc.plist` over `config.plist` (same config without that kext).
 
 From macOS:
 
@@ -20,6 +24,10 @@ cp /Volumes/1401/EFI/OC/config-identity.plist /Volumes/1401/EFI/OC/config.plist
 From Windows, copy `Z:\EFI\OC\config-identity.plist` over `Z:\EFI\OC\config.plist`.
 
 `NVRAM → Delete` covers `boot-args` and `csr-active-config`, so a config change takes effect at the next boot without an NVRAM reset.
+
+## Boot picker
+
+The picker is hidden. Hold **Alt** (Option) or **Esc** right after power-on to show it; it then waits for a choice. If macOS isn't the default any more, pick it and press **Ctrl+Enter**, or run `sudo bash /Volumes/1401/fastboot/set-startup-disk.sh` from macOS.
 
 ## OpenCore itself broken (picker doesn't appear)
 

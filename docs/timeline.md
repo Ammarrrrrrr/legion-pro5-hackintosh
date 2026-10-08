@@ -37,3 +37,7 @@
 19. **Native Wi-Fi:** AirportItlwm 2.4.0-alpha (laobamac fork, Sequoia build, no root patches). Works.
 20. **This repository created.** Pushed to a private GitHub repository.
 21. **Unused kexts removed:** six kexts that no config enabled, and the stock VoodooI2C after `config-safe-nvoff.plist` was switched to the working trackpad kexts.
+22. **YogaSMC 1.5.3** added (`config-yogasmc.plist`): Lenovo Fn-lock, battery conservation and rapid charge.
+23. **RGB keyboard:** internal USB port 1 (ITE `048d:c995`, 4-zone RGB) added to `UTBMap.kext` in place of the `SS06` USB 3 lane. Lighting app `~/legion-rgb` written: a Swift port of L5P-Keyboard-RGB with a menu bar app and the `legionrgb` CLI.
+24. **RGB reset loop:** macOS kept resetting the controller because of its input-less interface 1; `LegionRGBUSBFix.kext` added (`config-rgbfix.plist`). The app now uses USB control transfers, so it needs no Input Monitoring.
+25. **Fast boot:** debug boot-args removed, `-nvrmnobootscreen` added, picker hidden (`config-fastboot.plist`). Login window at 16 s instead of 39 s after kernel start.

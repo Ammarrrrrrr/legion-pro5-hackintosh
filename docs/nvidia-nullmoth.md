@@ -27,7 +27,7 @@ From NullMoth's README:
 
 NullMoth recommends `ResizeGpuBars 13` / `ResizeAppleGpuBars -1` plus a Kernel→Block on `IONDRVSupport`. This laptop instead uses **`ResizeGpuBars -1` / `ResizeAppleGpuBars 0` with no IONDRV block**, and it works: the driver grows BAR1 by itself (below). The full-BAR variant was never tested on 1.0.6 or later.
 
-## Boot timing (how 2½ minutes became 41 seconds)
+## Boot timing (how 2½ minutes became 16 seconds)
 
 NVRM waits a "settle" time after loading before starting the GPU. The default is 500 ms if it could place BAR1, or 100 000 ms if not. The boot-arg `nvrmsettle=<ms>` overrides it.
 
@@ -35,9 +35,25 @@ NVRM waits a "settle" time after loading before starting the GPU. The default is
 |---|---|---|---|
 | `nvrmsettle=100000` (first working setup) | ~127 s | ~145 s | needed on 1.0.1 |
 | `nvrmsettle=20000` | ~47 s | ~66 s | |
-| no `nvrmsettle` (driver default 500 ms) | ~28 s | **~41 s** | current; the early start no longer hangs on 1.0.6+ |
+| no `nvrmsettle` (driver default 500 ms) | ~28 s | ~41 s | the early start no longer hangs on 1.0.6+ |
+| + no `-v`, `-nvrmnobootscreen`, hidden picker | ~5.6 s | **~16 s** | current (2026-10-08) |
 
-Times are counted from the kernel start. Another ~9 s per boot was saved by turning off OpenCore's log file on the USB stick (`Misc/Debug/Target 3`, `AppleDebug false`), and up to 7 s more by the 3 s picker timeout.
+Times are counted from the kernel start. Another ~9 s per boot was saved by turning off OpenCore's log file on the USB stick (`Misc/Debug/Target 3`, `AppleDebug false`), and the picker countdown before macOS by hiding the picker.
+
+The last step, measured with [`tools/fastboot/boot-timing.sh`](../tools/fastboot/boot-timing.sh):
+
+| Milestone | With `-v` and the boot-screen copy | Now |
+|---|---|---|
+| Root file system mounted | 9.9 s | 3.5 s |
+| launchd: early boot complete | 21.1 s | 5.7 s |
+| NVRM probes the GPU | 22.3 s | 5.6 s |
+| Driver takes over the display | 31.9 s | 10.8 s |
+| Login window shown | 38.7 s | **16.1 s** |
+
+- **`-v` was the biggest cost.** The kernel draws every message on the 2560×1600 boot console, which made the early boot about three times slower.
+- **`-nvrmnobootscreen`** (found in the NVRM binary, not in NullMoth's docs) skips the boot-screen snapshot. NVRM copied the 25 MB console from BAR1 at about 6 MB/s: `boot screen: copied 2560x1600 pitch 16384 (25600 KB) from the console … in 4304 ms`. Without it the takeover is black for a moment (`black takeover`).
+- Left as is: the 500 ms settle, about 0.75 s measuring the three idle display heads (`nvfbheads=4`, needed for external displays) and about 2.6 s of GSP firmware start-up.
+- Other boot-args in the binary, untested: `-nvfbsurvey`, `-nvrmnoflip`, `-nvrmnogo`, `nvaccelfb`, `nvcursor`, `nvfbsample`, `nvhud`, `nvhwvbl`.
 
 From 1.0.6 on, the driver resizes BAR1 itself and places it outside the boot console:
 

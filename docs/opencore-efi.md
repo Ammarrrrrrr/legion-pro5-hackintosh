@@ -18,13 +18,16 @@
 
 | File | Role |
 |---|---|
-| `config.plist` | **Everyday config.** Identical to `config-airportitlwm.plist`. |
+| `config.plist` | **Everyday config.** Identical to `config-fastboot.plist`. |
+| `config-fastboot.plist` | `config-rgbfix.plist` without the debug boot-args, plus `-nvrmnobootscreen` and a hidden picker (`ShowPicker false`, `Timeout 0`, `TakeoffDelay 10000`) |
+| `config-rgbfix.plist` | `config-yogasmc.plist` + `LegionRGBUSBFix.kext`. Verbose boot with the picker: the first fallback. |
+| `config-yogasmc.plist` | `config-airportitlwm.plist` + `YogaSMC.kext` |
 | `config-airportitlwm.plist` | `config-identity.plist` + native Wi-Fi (AirportItlwm enabled, itlwm disabled) + `SystemMemoryStatus Upgradable` |
 | `config-identity.plist` | Previous everyday config: itlwm + HeliPort for Wi-Fi, own Mac identity |
 | `config-fast-trackpad-gpio.plist` | Like `config-identity.plist`, but without the Mac identity fix (`CustomSMBIOSGuid` off) |
 | `config-safe-nvoff.plist` | **Recovery:** Safe Mode (`-x`) + `-nvoff`. The NVIDIA driver doesn't load, giving an unaccelerated desktop to repair things from. Same kexts as `config-identity.plist`, so the trackpad works there too. |
 
-All five pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repository the identity values (`SystemSerialNumber`, `MLB`, `SystemUUID`, `ROM`) are OpenCore's sample placeholders.
+All eight pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repository the identity values (`SystemSerialNumber`, `MLB`, `SystemUUID`, `ROM`) are OpenCore's sample placeholders.
 
 ## Key settings (everyday config)
 
@@ -37,10 +40,10 @@ All five pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repositor
 | Kernel/Quirks | `DisableIoMapper` | `true` | VT-d is on in BIOS |
 | Kernel/Quirks | `CustomSMBIOSGuid` | `true` | required because `UpdateSMBIOSMode` is `Custom`, see [mac-identity.md](mac-identity.md) |
 | Kernel/Quirks | `ProvideCurrentCpuInfo`, `AppleXcpmCfgLock`, `AppleXcpmExtraMsrs` | `true` | from the Legion EFI, for the hybrid CPU and XCPM |
-| Misc/Boot | `Timeout` / `ShowPicker` | `3` / `true` | fast boot, but Windows can still be picked |
+| Misc/Boot | `ShowPicker` / `Timeout` / `TakeoffDelay` | `false` / `0` / `10000` | no picker delay. Hold **Alt** (Option) or **Esc** at power-on to show the picker; it then waits for a choice. The default entry is the Startup Disk (`efi-boot-device`), set with [`tools/fastboot/set-startup-disk.sh`](../tools/fastboot/set-startup-disk.sh). |
 | Misc/Debug | `Target` / `AppleDebug` | `3` / `false` | no log file on the USB stick. File logging cost about 9.3 s per boot. |
 | Misc/Security | `SecureBootModel` / `ScanPolicy` | `Disabled` / `0` | |
-| NVRAM | `boot-args` | `-v keepsyms=1 debug=0x100 -liludbg liludump=60 nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth amfi_get_out_of_my_way=0x1 amfi=0x80` | NullMoth's required args plus debug args. `nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth amfi…` are required by the driver. |
+| NVRAM | `boot-args` | `nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth -nvrmnobootscreen amfi_get_out_of_my_way=0x1 amfi=0x80` | NullMoth's required args plus `-nvrmnobootscreen` (see [nvidia-nullmoth.md](nvidia-nullmoth.md)). The debug args `-v keepsyms=1 debug=0x100 -liludbg liludump=60` were removed on 2026-10-08; `config-rgbfix.plist` still has them. |
 | NVRAM | `csr-active-config` | `430A0000` (0xA43) | required by NullMoth (unsigned kexts in the Auxiliary KC) |
 | NVRAM/Delete | `boot-args`, `csr-active-config` | listed | config edits apply at the next boot without an NVRAM reset |
 | PlatformInfo | `SystemProductName` | `MacBookPro16,4` | |
@@ -77,6 +80,8 @@ UEFI drivers: `OpenRuntime`, `OpenCanopy`, `ResetNvramEntry` (all OpenCore 1.0.8
 | 21 | VoodooI2CHID | 1.0 (from VoodooI2C 2.9.1) | ✅ | |
 | 22, 24 | VoodooPS2Controller + VoodooPS2Keyboard | 2.3.8 | ✅ | acidanthera |
 | 28–29 | USBToolBox + UTBMap | 1.2.0 / 1.1 | ✅ | USBToolBox; UTBMap is the Legion EFI's port map |
+| 30 | YogaSMC | 1.5.3 | ✅ | zhen-zen; Lenovo `VPC2004` (`IdeaVPC`) and Game Zone WMI, see [power-sleep.md](power-sleep.md#lenovo-features-yogasmc) |
+| 31 | LegionRGBUSBFix (codeless) | 1.0.0 | ✅ | Gives interface 1 of the ITE 8295 RGB controller (`048d:c995`) a do-nothing driver so macOS stops resetting it every 0.6 s; see camera-audio-memory-usb.md |
 | 27 | itlwm | 2.3.0 | off | used before AirportItlwm, with HeliPort |
 | 23, 25–26 | VoodooInput, VoodooPS2Mouse, VoodooPS2Trackpad (plug-ins inside VoodooPS2Controller) | 2.3.8 | off | not needed with the I2C trackpad |
 

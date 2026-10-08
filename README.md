@@ -16,11 +16,13 @@ The OpenCore EFI in `EFI/` is the exact working copy. The only difference is tha
 | Area | Status | Notes |
 |---|---|---|
 | Graphics | ✅ NVIDIA RTX 4060, Metal 3, 2560×1600 @ 60 Hz | NullMoth driver 1.0.9 (all later packages up to 1.0.11 ship the same driver files) |
-| Boot | ✅ about 41 s from kernel start to the login screen | no `nvrmsettle`, 3 s picker, OpenCore file logging off |
+| Boot | ✅ about 16 s from kernel start to the login window | no verbose mode, `-nvrmnobootscreen`, hidden picker (hold Alt or Esc), no `nvrmsettle` |
 | Trackpad | ✅ multitouch with gestures, interrupt mode | VoodooI2C with a Raptor Lake controller ID, plus a Raptor Lake build of VoodooGPIO |
 | Wi-Fi | ✅ native macOS Wi-Fi menu | AirportItlwm 2.4.0-alpha (laobamac fork) for Sequoia, no root patches |
 | Bluetooth | ✅ | IntelBluetoothFirmware + IntelBTPatcher + BlueToolFixup |
 | Keyboard | ✅ PS/2 | VoodooPS2 |
+| Keyboard lighting | ✅ 4-zone RGB | USB map change + `LegionRGBUSBFix.kext`; app in the private repo [legion-rgb-macos](https://github.com/Ammarrrrrrr/legion-rgb-macos) |
+| Lenovo features | ✅ driver loaded | YogaSMC 1.5.3 (`IdeaVPC`, Game Zone WMI): Fn-lock, battery conservation and rapid charge. Not every feature tested. |
 | Audio | ✅ devices present (speakers, mic) | AppleALC layout-id 99. Headphone jack not tested. |
 | Camera | ✅ QuickTime, FaceTime, browsers | Photo Booth stays black (driver gap). The laptop's physical camera switch must be open. |
 | Battery, USB, NVMe, Ethernet | ✅ | SMCBatteryManager, USBToolBox + UTBMap, NVMeFix, RealtekRTL8111 |

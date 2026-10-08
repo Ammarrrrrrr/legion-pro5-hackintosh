@@ -44,7 +44,6 @@ Watch [laobamac/itlwm](https://github.com/laobamac/itlwm/releases) for a non-alp
 
 ## Open items
 
-- Remove the debug boot-args (`-v keepsyms=1 debug=0x100 -liludbg liludump=60`) once you're confident. With `debug=0x100` a panic halts on screen instead of restarting.
 - Optional Wi-Fi 6: add `itlwm_he=1`.
 - Not tested yet: headphone jack, Bluetooth pairing, HDMI output, Fn keys.
 - Windows clock: Windows keeps the hardware clock in local time and macOS in UTC. Fix it on the Windows side with the registry value `HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation\RealTimeIsUniversal` (DWORD 1).

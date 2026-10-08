@@ -17,6 +17,8 @@ Every external component, where it came from and how it was verified. SHA-256 va
 | NullMoth driver | package 1.0.9 (release v1.0.14) | `nullmoth-nvidia-1.0.9.tar.gz` | `9dbfdb1b1359e2ef4166a46905ee195774b0b4ba20be083a8111ef550b1e5789` | https://github.com/nullmoth/nvidia-macos-driver/releases |
 | NullMoth driver (rollback) | package 1.0.6 (release v1.0.9) | `nullmoth-nvidia-1.0.6.tar.gz` | `25fdedc727b4ee3792ff5439d056d79f362219c77e5a3f2bdd35e054429229cf` | same |
 | AirportItlwm (Sequoia) | 2.4.0-alpha (`9bc4b4d`) | `AirportItlwm-Sequoia-v2.4.0-RELEASE-alpha-9bc4b4d.zip` | `53b4eba2fd67ba37ff850a0b5fb55a3012049b08cf4f15b7c73dac206aab5355` | https://github.com/laobamac/itlwm/releases |
+| YogaSMC (kext) | 1.5.3 | `YogaSMC-Release.zip` | `d212edf601a6f7722f60e63a572ed3e689430d89fdae8a0f5365c8d6f799768e` | https://github.com/zhen-zen/YogaSMC/releases (no published digest for this 2022 release; hash taken after download) |
+| YogaSMC (apps) | 1.5.3 | `YogaSMC-App-Release.dmg` | `48a664f67f0523fd8e2ed572ceb504debe318778a777a726a9882178e0e967e7` | same |
 
 ## Built from source on this machine (Command Line Tools)
 

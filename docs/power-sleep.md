@@ -39,6 +39,12 @@ Consequences:
 
 SMCBatteryManager reports the battery normally. It sits at about 82% with "AC attached; not charging" because **Lenovo conservation mode** stops charging around 80%. That mode is set in Lenovo Vantage on Windows and enforced by the EC. Turn it off there for a full charge.
 
+## Lenovo features (YogaSMC)
+
+YogaSMC 1.5.3 ([zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC), the last release) loads from the EFI. Its `IdeaVPC` driver attaches to `VPC0` (`VPC2004`) under `EC0` and reports `ConservationMode`, `RapidChargeMode`, `FnlockMode` and battery details in ioreg. Its WMI part found the Game Zone (`GZFD`), battery and Fn+S devices. The EC sensor names in its default list don't exist on this EC (`DirectECKey` all `No`), so expect no extra temperature readings from it.
+
+Control it with the menu bar app `/Applications/YogaSMCNC.app` or the pane at the bottom of System Settings (`~/Library/PreferencePanes/YogaSMCPane.prefPane`). Battery conservation mode (stop at about 80%) set here is the same EC setting as in Lenovo Vantage. The downloads and their SHA-256 are in `YogaSMC/1.5.3/` on the stick.
+
 ## CPU power management
 
 `X86PlatformPlugin` loads with the MacBookPro16,4 board-id. CpuTopologyRebuild and `ProvideCurrentCpuInfo` handle the hybrid P/E cores. Not tuned further; CPUFriend isn't used.
