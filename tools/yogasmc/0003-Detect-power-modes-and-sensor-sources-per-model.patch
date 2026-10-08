@@ -1,0 +1,472 @@
+From 1b80f5b9d5f22c2cc05689b3c265fa92373f0072 Mon Sep 17 00:00:00 2001
+From: ammar <surfmemo58@gmail.com>
+Date: Fri, 9 Oct 2026 02:31:31 +0300
+Subject: [PATCH] 1.6.2: power modes and sensor sources detected per model,
+ like LLT
+
+- Power modes from the SupportedPowerModes capability (LLT bit mapping and
+  Extreme rules); fallback Quiet/Balanced/Performance on older firmware.
+  Published as "Legion Power Modes"; PowerMode rejects unsupported modes.
+- Sensors: LENOVO_OTHER_METHOD capability, then LENOVO_FAN_METHOD 7/8 (ids
+  from the Linux legion-laptop driver), then the old Game Zone getters;
+  ProbeAll includes the fan method reads.
+- App and pane build their mode list from the kext (Extreme shows on this
+  Legion Pro 5); README compatibility section.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                       |  26 ++++-
+ YogaSMC/YogaWMI/IdeaWMI.cpp     | 177 +++++++++++++++++++++++++-------
+ YogaSMC/YogaWMI/IdeaWMI.hpp     |  31 +++++-
+ YogaSMCNC/LegionHelper.swift    |  19 +++-
+ YogaSMCPane/LegionSMCPane.swift |  29 ++++--
+ 5 files changed, 225 insertions(+), 57 deletions(-)
+
+diff --git a/README.md b/README.md
+index 313fa68..c8273ef 100644
+--- a/README.md
++++ b/README.md
+@@ -12,10 +12,10 @@ Stock YogaSMC 1.5.3 loads on Legion laptops (`IdeaVPC` on `VPC2004`, WMI on `GZF
+ 
+ | Feature | How |
+ |---|---|
+-| Power mode Quiet / Balanced / Performance / Custom (read and set) | Game Zone `GetSmartFanMode` (45) / `SetSmartFanMode` (44), values 1, 2, 3, 255 |
++| Power mode Quiet / Balanced / Performance / Extreme / Custom (read and set; the list comes from the firmware) | Game Zone `GetSmartFanMode` (45) / `SetSmartFanMode` (44), values 1, 2, 3, 224, 255; `SupportedPowerModes` capability `0x00070000` |
+ | Fn+Q on-screen popup with the new mode | Game Zone events `0xE3` (smart fan mode) and `0xE7` (thermal mode) |
+-| CPU and GPU fan speed | `LENOVO_OTHER_METHOD.GetFeatureValue` `0x04030001` / `0x04030002`, Game Zone fallback |
+-| CPU, GPU and PCH temperature | `GetFeatureValue` `0x05040000` / `0x05050000` / `0x05010000`, Game Zone fallback |
++| CPU and GPU fan speed | `LENOVO_OTHER_METHOD.GetFeatureValue` `0x04030001` / `0x04030002`, then `LENOVO_FAN_METHOD` 7, then Game Zone |
++| CPU, GPU and PCH temperature | `GetFeatureValue` `0x05040000` / `0x05050000` / `0x05010000`, then `LENOVO_FAN_METHOD` 8, then Game Zone |
+ | SMC keys for monitoring apps | `FNum`, `F0Ac`, `F1Ac`, `F0Mx` (when known), `TCXC`, `TG0P`, `TG0D`, `TPCD` |
+ | Touchpad lock, Win key lock, display overdrive | Game Zone 24–26, 21–23, 49–51, only when the BIOS reports support |
+ | Menu bar app (YogaSMCNC) | Legion section: power mode, temperatures, fans, battery conservation, rapid charge, Fn lock, always-on USB and the toggles above |
+@@ -30,6 +30,24 @@ Fixes to upstream code found on the way:
+ 
+ Rapid charge on this Legion is accepted only while the EC flag `QCBX` is set; the kext re-checks it on every battery update and reports `unsupported` otherwise.
+ 
++## Compatibility
++
++Only the Legion Pro 5 16IRX9 has been tested. The driver is written to adapt to other Legions the way LLT does, but expect differences on other models:
++
++| Area | Other Legions |
++|---|---|
++| Battery conservation, Fn lock, always-on USB | Standard IdeaPad `VPC2004` interface, same as stock YogaSMC. Should work on any Legion. |
++| Power modes | The list comes from the firmware's `SupportedPowerModes` capability (Quiet, Balanced, Performance, Extreme, Custom), using LLT's rules. Without that capability (older Legions) it offers Quiet, Balanced and Performance. Custom only switches to the BIOS's custom profile; there is no editor for power limits or fan curves. |
++| Fn+Q popup | Needs the Game Zone smart fan event (`0xE3`), which Legion firmware sends on Fn+Q. |
++| Fans and temperatures | Tried in LLT's order, first source that answers wins: `LENOVO_OTHER_METHOD` capabilities (Gen 7+), `LENOVO_FAN_METHOD` (some Gen 6/7, untested), the old Game Zone getters (older models). Two fans only; models with a third fan show two. Anything unreadable shows as unavailable. |
++| Touchpad lock, Win key lock, overdrive | Shown only when the BIOS reports support. Touchpad lock may not affect I2C touchpads. |
++| Rapid charge | Only while the EC allows it; shown as unavailable otherwise. |
++| AMD Legions | Same WMI interfaces, untested. |
++
++Requirements: OpenCore with Lilu and VirtualSMC (not FakeSMC), stock YogaSMC removed or disabled, macOS 11 or later for the app and the pane (x86_64).
++
++To check another model, run `yogactl props` (look at `Legion Capabilities`, `Legion Power Modes`, `Legion Sensor Source`) and `yogactl probe`. An issue with both outputs and the laptop model makes support easy to add.
++
+ ## Install
+ 
+ Download the zips from the [latest release](../../releases/latest), or build them (below).
+@@ -45,7 +63,7 @@ The apps and the pane are ad-hoc signed. If macOS refuses to open them after dow
+ 
+ ```bash
+ yogactl mode                 # current power mode
+-yogactl mode performance     # quiet | balanced | performance | custom
++yogactl mode performance     # quiet | balanced | performance | custom, or 224 for extreme
+ yogactl sensors              # fans and temperatures, and where each is read from
+ yogactl probe                # every read-only Game Zone getter and capability
+ yogactl acpi DSDT dsdt.aml   # dump an ACPI table through the kext
+diff --git a/YogaSMC/YogaWMI/IdeaWMI.cpp b/YogaSMC/YogaWMI/IdeaWMI.cpp
+index 7c5762e..f6556c8 100644
+--- a/YogaSMC/YogaWMI/IdeaWMI.cpp
++++ b/YogaSMC/YogaWMI/IdeaWMI.cpp
+@@ -410,6 +410,72 @@ IOReturn IdeaWMIGameZone::getFeature(UInt32 id, UInt32 *value) {
+     return ret;
+ }
+ 
++IOReturn IdeaWMIGameZone::fanMethodCall(UInt32 method, UInt8 id, UInt32 *result) {
++    if (!YWMI->hasMethod(LENOVO_FAN_WMI_METHOD))
++        return kIOReturnUnsupported;
++
++    OSData *in = OSData::withBytes(&id, sizeof(id));
++    IOReturn ret = YWMI->evaluateInteger(LENOVO_FAN_WMI_METHOD, 0, method, result, in, true);
++    OSSafeReleaseNULL(in);
++    return ret;
++}
++
++IOReturn IdeaWMIGameZone::readSource(UInt8 source, UInt32 arg, UInt32 *result) {
++    switch (source) {
++        case LEGION_SOURCE_OTHER:
++            return getFeature(arg, result);
++        case LEGION_SOURCE_FAN:
++            return fanMethodCall(arg >> 8, arg & 0xff, result);
++        case LEGION_SOURCE_GAME_ZONE:
++            return gameZoneCall(arg, result);
++        default:
++            return kIOReturnUnsupported;
++    }
++}
++
++// LenovoLegionToolkit Compatibility.GetSupportedPowerModesAsync / GetSupportsExtremeMode
++void IdeaWMIGameZone::updateSupportedModes(UInt32 smartFanVersion) {
++    UInt32 bits = 0, legionZoneVersion = 0;
++    bool known = getFeature(LENOVO_CAP_SUPPORTED_MODES, &bits) == kIOReturnSuccess;
++    if (getFeature(LENOVO_CAP_LEGION_ZONE_VER, &legionZoneVersion) != kIOReturnSuccess)
++        legionZoneVersion = 0;
++
++    supportedModeCount = 0;
++    if (!known) {
++        // older Game Zone firmware: the three Fn+Q modes
++        supportedModes[supportedModeCount++] = LEGION_MODE_QUIET;
++        supportedModes[supportedModeCount++] = LEGION_MODE_BALANCED;
++        supportedModes[supportedModeCount++] = LEGION_MODE_PERFORMANCE;
++    } else {
++        if (bits & BIT(0))
++            supportedModes[supportedModeCount++] = LEGION_MODE_QUIET;
++        if (bits & BIT(1))
++            supportedModes[supportedModeCount++] = LEGION_MODE_BALANCED;
++        if (bits & BIT(2))
++            supportedModes[supportedModeCount++] = LEGION_MODE_PERFORMANCE;
++        if ((bits & BIT(4)) && ((smartFanVersion >= 6 && smartFanVersion <= 8) ||
++                                (legionZoneVersion >= 3 && legionZoneVersion <= 5)))
++            supportedModes[supportedModeCount++] = LEGION_MODE_EXTREME;
++        if (bits & BIT(16))
++            supportedModes[supportedModeCount++] = LEGION_MODE_CUSTOM;
++    }
++
++    OSArray *modes = OSArray::withCapacity(supportedModeCount);
++    if (modes) {
++        for (UInt8 i = 0; i < supportedModeCount; i++) {
++            OSNumber *num = OSNumber::withNumber(supportedModes[i], 32);
++            if (num) {
++                modes->setObject(num);
++                num->release();
++            }
++        }
++        setProperty("Legion Power Modes", modes);
++        modes->release();
++    }
++    if (known)
++        setProperty("SupportedPowerModes", bits, 32);
++}
++
+ IOReturn IdeaWMIGameZone::setFeature(UInt32 id, UInt32 value) {
+     if (!otherMethod)
+         return kIOReturnUnsupported;
+@@ -443,7 +509,10 @@ void IdeaWMIGameZone::processWMI() {
+ 
+     // Legion extensions, see LenovoLegionToolkit (LENOVO_GAMEZONE_DATA / LENOVO_OTHER_METHOD)
+     otherMethod = YWMI->hasMethod(LENOVO_OTHER_WMI_METHOD);
+-    smartFanCap  = gameZoneCall(GAME_ZONE_WMI_CAP_SMARTFAN, &result) == kIOReturnSuccess && result;
++    UInt32 smartFanVersion = 0;
++    smartFanCap  = gameZoneCall(GAME_ZONE_WMI_CAP_SMARTFAN, &smartFanVersion) == kIOReturnSuccess && smartFanVersion;
++    if (smartFanCap)
++        updateSupportedModes(smartFanVersion);
+     touchpadCap  = gameZoneCall(GAME_ZONE_WMI_CAP_TOUCHPAD, &result) == kIOReturnSuccess && result;
+     winKeyCap    = gameZoneCall(GAME_ZONE_WMI_CAP_WIN_KEY, &result) == kIOReturnSuccess && result;
+     overDriveCap = gameZoneCall(GAME_ZONE_WMI_CAP_OVER_DRIVE, &result) == kIOReturnSuccess && result;
+@@ -480,43 +549,55 @@ void IdeaWMIGameZone::probeSensors() {
+         return;
+     sensorsProbed = true;
+ 
++    // Same order as LenovoLegionToolkit: capability (Gen 7+), fan method, then the old Game Zone getters
+     static const struct {
+         UInt32 sensor;
+         UInt32 capability;
++        UInt32 fanMethodArg;    // (method << 8) | id, 0 = none
+         UInt32 gameZone;
+     } sources[] = {
+-        {LEGION_SENSOR_CPU_FAN,  LENOVO_CAP_CPU_FAN_SPEED, GAME_ZONE_WMI_GET_FAN_ONE},
+-        {LEGION_SENSOR_GPU_FAN,  LENOVO_CAP_GPU_FAN_SPEED, GAME_ZONE_WMI_GET_FAN_TWO},
+-        {LEGION_SENSOR_CPU_TEMP, LENOVO_CAP_CPU_TEMP,      GAME_ZONE_WMI_GET_TMP_CPU},
+-        {LEGION_SENSOR_GPU_TEMP, LENOVO_CAP_GPU_TEMP,      GAME_ZONE_WMI_GET_TMP_GPU},
+-        {LEGION_SENSOR_PCH_TEMP, LENOVO_CAP_PCH_TEMP,      0},
+-        {LEGION_SENSOR_IR_TEMP,  0,                        GAME_ZONE_WMI_GET_TMP_IR},
++        {LEGION_SENSOR_CPU_FAN,  LENOVO_CAP_CPU_FAN_SPEED, (LENOVO_FAN_GET_CURRENT_SPEED << 8) | 0, GAME_ZONE_WMI_GET_FAN_ONE},
++        {LEGION_SENSOR_GPU_FAN,  LENOVO_CAP_GPU_FAN_SPEED, (LENOVO_FAN_GET_CURRENT_SPEED << 8) | 1, GAME_ZONE_WMI_GET_FAN_TWO},
++        {LEGION_SENSOR_CPU_TEMP, LENOVO_CAP_CPU_TEMP,      (LENOVO_FAN_GET_CURRENT_TEMP << 8) | 3,  GAME_ZONE_WMI_GET_TMP_CPU},
++        {LEGION_SENSOR_GPU_TEMP, LENOVO_CAP_GPU_TEMP,      (LENOVO_FAN_GET_CURRENT_TEMP << 8) | 4,  GAME_ZONE_WMI_GET_TMP_GPU},
++        {LEGION_SENSOR_PCH_TEMP, LENOVO_CAP_PCH_TEMP,      0,                                      0},
++        {LEGION_SENSOR_IR_TEMP,  0,                        0,                                      GAME_ZONE_WMI_GET_TMP_IR},
+     };
+ 
+     OSDictionary *status = OSDictionary::withCapacity(LEGION_SENSOR_COUNT);
+     char desc[48];
++    static const char *sourceName[] = {"", "Other", "FanMethod", "GameZone"};
+ 
+     for (auto &src : sources) {
+-        UInt32 otherValue = 0, gzValue = 0;
+-        bool otherOk = src.capability && getFeature(src.capability, &otherValue) == kIOReturnSuccess &&
+-                       plausible(src.sensor, otherValue);
+-        bool gzOk = src.gameZone && gameZoneCall(src.gameZone, &gzValue) == kIOReturnSuccess &&
+-                    plausible(src.sensor, gzValue);
+-
+-        // LLT reads Legion Gen 7+ sensors through LENOVO_OTHER_METHOD; prefer it unless it reports a
+-        // stopped fan while Game Zone reports a spinning one
+-        if (otherOk && !(isFanSensor(src.sensor) && otherValue == 0 && gzOk && gzValue != 0)) {
+-            sensorSource[src.sensor] = src.capability;
+-            sensorFromOther[src.sensor] = true;
+-            snprintf(desc, sizeof(desc), "Other 0x%08x (%u)", src.capability, otherValue);
+-        } else if (gzOk) {
+-            sensorSource[src.sensor] = src.gameZone;
+-            sensorFromOther[src.sensor] = false;
+-            snprintf(desc, sizeof(desc), "GameZone %u (%u)", src.gameZone, gzValue);
+-        } else {
+-            snprintf(desc, sizeof(desc), "unavailable");
++        const struct { UInt8 source; UInt32 arg; } candidates[] = {
++            {LEGION_SOURCE_OTHER, src.capability},
++            {LEGION_SOURCE_FAN, src.fanMethodArg},
++            {LEGION_SOURCE_GAME_ZONE, src.gameZone},
++        };
++
++        UInt8 chosen = LEGION_SOURCE_NONE;
++        UInt32 chosenArg = 0, chosenValue = 0;
++        for (auto &c : candidates) {
++            UInt32 value = 0;
++            if (!c.arg || readSource(c.source, c.arg, &value) != kIOReturnSuccess || !plausible(src.sensor, value))
++                continue;
++            // a stopped fan can also mean "not implemented here": keep looking for a source that reports rpm
++            if (chosen == LEGION_SOURCE_NONE || (isFanSensor(src.sensor) && chosenValue == 0 && value != 0)) {
++                chosen = c.source;
++                chosenArg = c.arg;
++                chosenValue = value;
++            }
++            if (!isFanSensor(src.sensor) || value != 0)
++                break;
+         }
+ 
++        sensorSource[src.sensor] = chosen;
++        sensorArg[src.sensor] = chosenArg;
++        if (chosen == LEGION_SOURCE_NONE)
++            snprintf(desc, sizeof(desc), "unavailable");
++        else
++            snprintf(desc, sizeof(desc), "%s 0x%08x (%u)", sourceName[chosen], chosenArg, chosenValue);
++
+         if (status) {
+             OSString *str = OSString::withCString(desc);
+             if (str) {
+@@ -533,12 +614,11 @@ void IdeaWMIGameZone::probeSensors() {
+ }
+ 
+ bool IdeaWMIGameZone::readSensor(UInt32 sensor, UInt32 *value) {
+-    if (sensor >= LEGION_SENSOR_COUNT || !sensorSource[sensor])
++    if (sensor >= LEGION_SENSOR_COUNT || sensorSource[sensor] == LEGION_SOURCE_NONE)
+         return false;
+ 
+     UInt32 result = 0;
+-    IOReturn ret = sensorFromOther[sensor] ? getFeature(sensorSource[sensor], &result)
+-                                           : gameZoneCall(sensorSource[sensor], &result);
++    IOReturn ret = readSource(sensorSource[sensor], sensorArg[sensor], &result);
+     if (ret != kIOReturnSuccess || !plausible(sensor, result))
+         return false;
+ 
+@@ -596,16 +676,14 @@ void IdeaWMIGameZone::setPowerMode(UInt32 mode) {
+         return;
+     }
+ 
+-    switch (mode) {
+-        case LEGION_MODE_QUIET:
+-        case LEGION_MODE_BALANCED:
+-        case LEGION_MODE_PERFORMANCE:
+-        case LEGION_MODE_EXTREME:
+-        case LEGION_MODE_CUSTOM:
+-            break;
+-        default:
+-            AlwaysLog(valueInvalid, "PowerMode");
+-            return;
++    bool supported = false;
++    for (UInt8 i = 0; i < supportedModeCount; i++)
++        if (supportedModes[i] == mode)
++            supported = true;
++    if (!supported) {
++        AlwaysLog(valueInvalid, "PowerMode");
++        setProperty("PowerModeSetResult", kIOReturnUnsupported, 32);
++        return;
+     }
+ 
+     OSNumber *in = OSNumber::withNumber(mode, 32);
+@@ -792,6 +870,29 @@ void IdeaWMIGameZone::setPropertiesGated(OSObject *props) {
+                     res->release();
+                 }
+             }
++            static const struct { UInt8 method; UInt8 id; const char *name; } fanReads[] = {
++                {LENOVO_FAN_GET_CURRENT_SPEED, 0, "Fan_GetCurrentFanSpeed CPU"},
++                {LENOVO_FAN_GET_CURRENT_SPEED, 1, "Fan_GetCurrentFanSpeed GPU"},
++                {LENOVO_FAN_GET_CURRENT_TEMP, 3, "Fan_GetCurrentSensorTemperature CPU"},
++                {LENOVO_FAN_GET_CURRENT_TEMP, 4, "Fan_GetCurrentSensorTemperature GPU"},
++            };
++            for (auto &f : fanReads) {
++                UInt32 value = 0;
++                IOReturn ret = fanMethodCall(f.method, f.id, &value);
++                snprintf(name, sizeof(name), "FM %u/%u %s", f.method, f.id, f.name);
++                OSObject *res;
++                if (ret == kIOReturnSuccess) {
++                    res = OSNumber::withNumber(value, 32);
++                } else {
++                    char err[24];
++                    snprintf(err, sizeof(err), "error 0x%x", ret);
++                    res = OSString::withCString(err);
++                }
++                if (res) {
++                    probe->setObject(name, res);
++                    res->release();
++                }
++            }
+             setProperty("Legion Probe", probe);
+             probe->release();
+         } else if (key->isEqualTo("DumpACPI")) {
+diff --git a/YogaSMC/YogaWMI/IdeaWMI.hpp b/YogaSMC/YogaWMI/IdeaWMI.hpp
+index 98275d2..efd4e9a 100644
+--- a/YogaSMC/YogaWMI/IdeaWMI.hpp
++++ b/YogaSMC/YogaWMI/IdeaWMI.hpp
+@@ -51,6 +51,20 @@ enum {
+     LENOVO_OTHER_GET_COMMAND  = 19, // GetDataByCommand(IDs, Command) -> data[]
+ };
+ 
++// LENOVO_FAN_METHOD, ids from the Linux legion-laptop driver (LLT uses the names)
++enum {
++    LENOVO_FAN_GET_CURRENT_SPEED = 7, // Fan_GetCurrentFanSpeed(uint8 FanID), 0 CPU, 1 GPU
++    LENOVO_FAN_GET_CURRENT_TEMP  = 8, // Fan_GetCurrentSensorTemperature(uint8 SensorID), 3 CPU, 4 GPU
++};
++
++// Where a Legion sensor is read from
++enum {
++    LEGION_SOURCE_NONE,
++    LEGION_SOURCE_OTHER,     // LENOVO_OTHER_METHOD GetFeatureValue(capability)
++    LEGION_SOURCE_FAN,       // LENOVO_FAN_METHOD with a one byte id
++    LEGION_SOURCE_GAME_ZONE, // LENOVO_GAMEZONE_DATA getter
++};
++
+ // LENOVO_OTHER_METHOD capability IDs, from LenovoLegionToolkit (CapabilityID)
+ enum {
+     LENOVO_CAP_IGPU_MODE          = 0x00010000,
+@@ -312,10 +326,23 @@ class IdeaWMIGameZone : public YogaWMI
+      *  Where each sensor is read from, 0 = unavailable, else WMI method id
+      *  of LENOVO_OTHER_METHOD (capability) or LENOVO_GAMEZONE_DATA
+      */
+-    UInt32 sensorSource[LEGION_SENSOR_COUNT] {};
+-    bool sensorFromOther[LEGION_SENSOR_COUNT] {};
++    UInt8 sensorSource[LEGION_SENSOR_COUNT] {};
++    UInt32 sensorArg[LEGION_SENSOR_COUNT] {};
+     bool sensorsProbed {false};
+ 
++    /**
++     *  Power modes the firmware accepts, as SetSmartFanMode values (see updateSupportedModes)
++     */
++    UInt32 supportedModes[5] {};
++    UInt8 supportedModeCount {0};
++    void updateSupportedModes(UInt32 smartFanVersion);
++
++    /**
++     *  LENOVO_FAN_METHOD call with a one byte argument
++     */
++    IOReturn fanMethodCall(UInt32 method, UInt8 id, UInt32 *result);
++    IOReturn readSource(UInt8 source, UInt32 arg, UInt32 *result);
++
+     /**
+      *  Evaluate a LENOVO_GAMEZONE_DATA method
+      *
+diff --git a/YogaSMCNC/LegionHelper.swift b/YogaSMCNC/LegionHelper.swift
+index d40a8dc..1a2acd1 100644
+--- a/YogaSMCNC/LegionHelper.swift
++++ b/YogaSMCNC/LegionHelper.swift
+@@ -21,13 +21,22 @@ class LegionHelper {
+     var rapidItem: NSMenuItem?
+ 
+     // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LLT PowerModeState + 1)
+-    static let modes: [(value: Int, name: String)] = [
+-        (1, "Quiet"), (2, "Balanced"), (3, "Performance"), (255, "Custom")
++    static let modeNames: [Int: String] = [
++        1: "Quiet", 2: "Balanced", 3: "Performance", 224: "Extreme", 255: "Custom"
+     ]
+ 
++    /// Modes the firmware supports ("Legion Power Modes", YogaSMC 1.6.2+), else the 1.6.0 list
++    static func supportedModes(_ service: io_service_t) -> [(value: Int, name: String)] {
++        var values = [1, 2, 3, 255]
++        if let rvalue = IORegistryEntryCreateCFProperty(service, "Legion Power Modes" as CFString, kCFAllocatorDefault, 0),
++           let list = rvalue.takeRetainedValue() as? [Int], !list.isEmpty {
++            values = list
++        }
++        return values.map { ($0, modeNames[$0] ?? "Mode \($0)") }
++    }
++
+     static func modeName(_ value: Int) -> String {
+-        if value == 224 { return "Extreme" }
+-        return modes.first { $0.value == value }?.name ?? "Unknown (\(value))"
++        return modeNames[value] ?? "Unknown (\(value))"
+     }
+ 
+     init?(_ menu: NSMenu, _ vpc: io_service_t) {
+@@ -55,7 +64,7 @@ class LegionHelper {
+         }
+ 
+         if caps["PowerMode"] == true {
+-            for mode in LegionHelper.modes {
++            for mode in LegionHelper.supportedModes(gameZone) {
+                 let item = NSMenuItem(title: mode.name, action: #selector(setMode(_:)), keyEquivalent: "")
+                 item.tag = mode.value
+                 item.target = self
+diff --git a/YogaSMCPane/LegionSMCPane.swift b/YogaSMCPane/LegionSMCPane.swift
+index 28b549e..b551adb 100644
+--- a/YogaSMCPane/LegionSMCPane.swift
++++ b/YogaSMCPane/LegionSMCPane.swift
+@@ -17,11 +17,23 @@ class LegionPaneController: NSObject {
+     var toggles: [(button: NSButton, key: String)] = []
+     var timer: Timer?
+ 
+-    // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LenovoLegionToolkit PowerModeState + 1)
+-    static let modes: [(value: Int, name: String)] = [
+-        (1, "Quiet"), (2, "Balanced"), (3, "Performance"), (255, "Custom")
++    // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LLT PowerModeState + 1)
++    static let modeNames: [Int: String] = [
++        1: "Quiet", 2: "Balanced", 3: "Performance", 224: "Extreme", 255: "Custom"
+     ]
+ 
++    /// Modes the firmware supports ("Legion Power Modes", YogaSMC 1.6.2+), else the 1.6.0 list
++    static func supportedModes(_ service: io_service_t) -> [(value: Int, name: String)] {
++        var values = [1, 2, 3, 255]
++        if let rvalue = IORegistryEntryCreateCFProperty(service, "Legion Power Modes" as CFString, kCFAllocatorDefault, 0),
++           let list = rvalue.takeRetainedValue() as? [Int], !list.isEmpty {
++            values = list
++        }
++        return values.map { ($0, modeNames[$0] ?? "Mode \($0)") }
++    }
++
++    var modes: [(value: Int, name: String)] = []
++
+     static let sensors: [(key: String, title: String, unit: String)] = [
+         ("CPU Temperature", "CPU", "°C"),
+         ("GPU Temperature", "GPU", "°C"),
+@@ -82,8 +94,9 @@ class LegionPaneController: NSObject {
+         left.spacing = 8
+ 
+         left.addArrangedSubview(header("Power Mode"))
+-        modeControl.segmentCount = LegionPaneController.modes.count
+-        for (index, mode) in LegionPaneController.modes.enumerated() {
++        modes = LegionPaneController.supportedModes(gameZone)
++        modeControl.segmentCount = modes.count
++        for (index, mode) in modes.enumerated() {
+             modeControl.setLabel(mode.name, forSegment: index)
+             modeControl.setWidth(0, forSegment: index)
+         }
+@@ -175,7 +188,7 @@ class LegionPaneController: NSObject {
+         _ = sendBoolean("Update", true, gameZone)
+ 
+         let mode = getNumber("PowerMode", gameZone)
+-        if let index = LegionPaneController.modes.firstIndex(where: { $0.value == mode }) {
++        if let index = modes.firstIndex(where: { $0.value == mode }) {
+             modeControl.selectedSegment = index
+         } else {
+             modeControl.selectedSegment = -1
+@@ -197,8 +210,8 @@ class LegionPaneController: NSObject {
+ 
+     @objc func modeChanged(_ sender: NSSegmentedControl) {
+         let index = sender.selectedSegment
+-        guard index >= 0, index < LegionPaneController.modes.count else { return }
+-        _ = sendNumber("PowerMode", LegionPaneController.modes[index].value, gameZone)
++        guard index >= 0, index < modes.count else { return }
++        _ = sendNumber("PowerMode", modes[index].value, gameZone)
+         update()
+     }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

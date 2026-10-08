@@ -19,7 +19,7 @@
 | File | Role |
 |---|---|
 | `config.plist` | **Everyday config.** Identical to `config-yogasmc-legion.plist`. |
-| `config-yogasmc-legion.plist` | `config-fastboot.plist` with `YogaSMC-Legion.kext` (1.6.1 Legion build) instead of `YogaSMC.kext` 1.5.3. Nothing else differs. |
+| `config-yogasmc-legion.plist` | `config-fastboot.plist` with `YogaSMC-Legion.kext` (1.6.2 Legion build) instead of `YogaSMC.kext` 1.5.3. Nothing else differs. |
 | `config-fastboot.plist` | `config-rgbfix.plist` without the debug boot-args, plus `-nvrmnobootscreen` and a hidden picker (`ShowPicker false`, `Timeout 0`, `TakeoffDelay 10000`) |
 | `config-rgbfix.plist` | `config-yogasmc.plist` + `LegionRGBUSBFix.kext`. Verbose boot with the picker: the first fallback. |
 | `config-yogasmc.plist` | `config-airportitlwm.plist` + `YogaSMC.kext` |
@@ -83,7 +83,7 @@ UEFI drivers: `OpenRuntime`, `OpenCanopy`, `ResetNvramEntry` (all OpenCore 1.0.8
 | 21 | VoodooI2CHID | 1.0 (from VoodooI2C 2.9.1) | ✅ | |
 | 22, 24 | VoodooPS2Controller + VoodooPS2Keyboard | 2.3.8 | ✅ | acidanthera |
 | 28–29 | USBToolBox + UTBMap | 1.2.0 / 1.1 | ✅ | USBToolBox; UTBMap is the Legion EFI's port map |
-| 30 | YogaSMC | 1.6.1 Legion build | ✅ | `YogaSMC-Legion.kext` in `config.plist` / `config-yogasmc-legion.plist`; every other config loads the stock `YogaSMC.kext` 1.5.3 (zhen-zen). Lenovo `VPC2004` (`IdeaVPC`) and Game Zone WMI, see [power-sleep.md](power-sleep.md#lenovo-features-yogasmc) |
+| 30 | YogaSMC | 1.6.2 Legion build | ✅ | `YogaSMC-Legion.kext` in `config.plist` / `config-yogasmc-legion.plist`; every other config loads the stock `YogaSMC.kext` 1.5.3 (zhen-zen). Lenovo `VPC2004` (`IdeaVPC`) and Game Zone WMI, see [power-sleep.md](power-sleep.md#lenovo-features-yogasmc) |
 | 31 | LegionRGBUSBFix (codeless) | 1.0.0 | ✅ | Gives interface 1 of the ITE 8295 RGB controller (`048d:c995`) a do-nothing driver so macOS stops resetting it every 0.6 s; see camera-audio-memory-usb.md |
 | 27 | itlwm | 2.3.0 | off | used before AirportItlwm, with HeliPort |
 | 23, 25–26 | VoodooInput, VoodooPS2Mouse, VoodooPS2Trackpad (plug-ins inside VoodooPS2Controller) | 2.3.8 | off | not needed with the I2C trackpad |

@@ -41,7 +41,7 @@ SMCBatteryManager reports the battery normally. It sits at about 82% with "AC at
 
 ## Lenovo features (YogaSMC)
 
-`config.plist` loads **YogaSMC 1.6.1, a Legion build** of [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) (upstream master `299907b` plus two patches, kept in [`tools/yogasmc/`](../tools/yogasmc/); source and release zips in the private repository [YogaSMC-Legion](https://github.com/Ammarrrrrrr/YogaSMC-Legion)). Every other config still loads the stock 1.5.3 release.
+`config.plist` loads **YogaSMC 1.6.2, a Legion build** of [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) (upstream master `299907b` plus three patches, kept in [`tools/yogasmc/`](../tools/yogasmc/); source and release zips in the private repository [YogaSMC-Legion](https://github.com/Ammarrrrrrr/YogaSMC-Legion)). Every other config still loads the stock 1.5.3 release.
 
 ### Why stock YogaSMC wasn't enough
 
@@ -51,7 +51,7 @@ Stock 1.5.3 attaches `IdeaVPC` to `VPC0` (`VPC2004`) and handles Fn-lock, batter
 
 | Feature | Firmware interface (from the BMOF on `GZFD` and LLT) |
 |---|---|
-| Power mode Quiet / Balanced / Performance / Custom, read and set | `LENOVO_GAMEZONE_DATA` 45 `GetSmartFanMode`, 44 `SetSmartFanMode` (values 1, 2, 3, 255) |
+| Power mode Quiet / Balanced / Performance / Extreme / Custom, read and set | `LENOVO_GAMEZONE_DATA` 45 `GetSmartFanMode`, 44 `SetSmartFanMode` (values 1, 2, 3, 224, 255). The list comes from the `SupportedPowerModes` capability (`0x1001f` here) with LLT's rules; Extreme was verified on 2026-10-09. |
 | Fn+Q on-screen popup with the new mode | Fn+Q EC query does `Notify (GZFD, 0xE3)` (smart fan mode event), then `0xE7` (thermal mode) |
 | CPU and GPU fan speed (rpm) | `LENOVO_OTHER_METHOD` 17 `GetFeatureValue` `0x04030001` / `0x04030002` |
 | CPU, GPU and PCH temperature | `GetFeatureValue` `0x05040000` / `0x05050000` / `0x05010000` |
@@ -64,10 +64,10 @@ Verified on 2026-10-09 (1.6.0): fans around 1,900 rpm idle, temperatures live, Q
 
 ### Using it
 
-- **Menu bar:** `/Applications/YogaSMCNC.app` (1.6.1, same build). The top of its menu has the power mode submenu, temperatures, fan speeds and toggles for battery conservation (stop at about 80%, the same EC setting as Lenovo Vantage), rapid charge, Fn lock, always-on USB, touchpad lock and "Disable Win (⌘) Key". It isn't a login item by default; use "Start at Login" in its menu.
-- **Shell:** `yogactl mode [quiet|balanced|performance|custom]`, `yogactl sensors`, `yogactl probe` (every read-only getter), `yogactl acpi DSDT dsdt.aml`. `smckeys F` / `smckeys TG0P` read the SMC keys. Both are built from `tools/yogasmc/` into `~/.local/bin`. No root needed.
+- **Menu bar:** `/Applications/YogaSMCNC.app` (1.6.2, same build). The top of its menu has the power mode submenu, temperatures, fan speeds and toggles for battery conservation (stop at about 80%, the same EC setting as Lenovo Vantage), rapid charge, Fn lock, always-on USB, touchpad lock and "Disable Win (⌘) Key". It isn't a login item by default; use "Start at Login" in its menu.
+- **Shell:** `yogactl mode [quiet|balanced|performance|custom|224]` (224 = Extreme), `yogactl sensors`, `yogactl probe` (every read-only getter), `yogactl acpi DSDT dsdt.aml`. `smckeys F` / `smckeys TG0P` read the SMC keys. Both are built from `tools/yogasmc/` into `~/.local/bin`. No root needed.
 - **Caveats:** "Disable Win (⌘) Key" disables Command, because that is the Windows key on macOS. Touchpad lock is an EC feature and may not affect the I2C touchpad.
-- **System Settings pane** (`~/Library/PreferencePanes/YogaSMCPane.prefPane`, 1.6.1, at the bottom of System Settings): a **Legion** tab with the power mode, live temperatures and fan speeds (every 2 s while open), touchpad lock and Win-key lock. The Idea tab keeps always-on USB, conservation mode and rapid charge; the General tab keeps Fn-key mode and the menu bar options. The stock 1.5.3 pane crashed when opened a second time on an IdeaPad-class machine (it freed the removed Think tab, then used its checkboxes); fixed.
+- **System Settings pane** (`~/Library/PreferencePanes/YogaSMCPane.prefPane`, 1.6.2, at the bottom of System Settings): a **Legion** tab with the power mode, live temperatures and fan speeds (every 2 s while open), touchpad lock and Win-key lock. The Idea tab keeps always-on USB, conservation mode and rapid charge; the General tab keeps Fn-key mode and the menu bar options. The stock 1.5.3 pane crashed when opened a second time on an IdeaPad-class machine (it freed the removed Think tab, then used its checkboxes); fixed.
 - **Rapid charge** shows as unavailable: this BIOS accepts it (`SBMC` 7/8) only while the EC flag `QCBX` is set, and `GBMD` reports the capability the same way. It is re-checked on every battery update, so it appears if the EC enables it.
 
 ### Building
