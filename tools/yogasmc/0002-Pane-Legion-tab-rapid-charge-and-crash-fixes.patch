@@ -1,0 +1,501 @@
+From d62ceee9108d8a6620c2bf9d1490969c81ec7751 Mon Sep 17 00:00:00 2001
+From: ammar <surfmemo58@gmail.com>
+Date: Fri, 9 Oct 2026 02:18:50 +0300
+Subject: [PATCH 2/2] Pane: Legion tab, rapid charge and re-selection crash
+ fixes; 1.6.1
+
+YogaSMCPane:
+- Legion tab built in code (power mode, sensors refreshed every 2 s,
+  touchpad lock / Win key lock / overdrive when supported)
+- Fix crash on the second willSelect: removed tabs were freed, leaving weak
+  outlets (indicatorCheck) nil for updateMain; keep them in removedTabs
+- Wire the Rapid Charge checkbox (never connected in the nib), show it off
+  and disabled while IdeaVPC reports "unsupported"
+- NSPrincipalClass YogaSMCPane.YogaSMCPane (the old value never resolved)
+- Tools/build-pane.sh: CLT-only build reusing the 1.5.3 nib
+
+IdeaVPC: re-check the rapid charge capability on every battery update
+(Legion GBMD sets it only while the EC allows quick charge), publish the
+rapid charge state instead of the conservation state after toggling.
+
+YogaSMCNC: show Rapid Charge as unavailable instead of a dead toggle.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Tools/build-pane.sh             |  53 ++++++++
+ YogaSMC/YogaVPC/IdeaVPC.cpp     |   9 +-
+ YogaSMCNC/LegionHelper.swift    |  14 ++
+ YogaSMCPane/IdeaSMCPane.swift   |  23 ++++
+ YogaSMCPane/LegionSMCPane.swift | 223 ++++++++++++++++++++++++++++++++
+ YogaSMCPane/YogaSMCPane.swift   |  30 ++++-
+ 6 files changed, 345 insertions(+), 7 deletions(-)
+ create mode 100755 Tools/build-pane.sh
+ create mode 100644 YogaSMCPane/LegionSMCPane.swift
+
+diff --git a/Tools/build-pane.sh b/Tools/build-pane.sh
+new file mode 100755
+index 0000000..46a4bb9
+--- /dev/null
++++ b/Tools/build-pane.sh
+@@ -0,0 +1,53 @@
++#!/bin/bash
++# Builds YogaSMCPane.prefPane with the Command Line Tools only (no Xcode).
++# swiftc builds the Swift sources as an MH_BUNDLE; the compiled YogaSMCPane.nib is reused from
++# the upstream 1.5.3 release (its outlets match the current xib; ibtool ships only with Xcode).
++# The Legion tab is built in code (YogaSMCPane/LegionSMCPane.swift).
++#
++# Usage: Tools/build-pane.sh [version] [upstream 1.5.3 YogaSMCPane.prefPane] [output dir]
++set -euo pipefail
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++VER=${1:-1.6.0}
++UPSTREAM=${2:-$ROOT/build/upstream-1.5.3/YogaSMCPane.prefPane}
++OUT=${3:-$ROOT/build/Release}
++MIN=11.0
++PANE=$OUT/YogaSMCPane.prefPane
++NIB=$UPSTREAM/Contents/Resources/Base.lproj/YogaSMCPane.nib
++[ -d "$NIB" ] || { echo "missing upstream nib $NIB" >&2; exit 1; }
++
++rm -rf "$PANE"
++mkdir -p "$PANE/Contents/MacOS" "$PANE/Contents/Resources/Base.lproj"
++SDK=$(xcrun --show-sdk-path)
++
++echo "  swiftc YogaSMCPane"
++swiftc -O -swift-version 5 -target "x86_64-apple-macos$MIN" -sdk "$SDK" -suppress-warnings \
++  -F "$ROOT/Frameworks" -F "$SDK/System/Library/PrivateFrameworks" \
++  -module-name YogaSMCPane -emit-executable -Xlinker -bundle \
++  -import-objc-header "$ROOT/YogaSMCUtils/YogaSMC-Bridging-Header.h" \
++  -framework AppKit -framework IOKit -framework PreferencePanes -framework OSD -framework CoreGraphics \
++  -framework ScriptingBridge \
++  "$ROOT/YogaSMCPane/YogaSMCPane.swift" "$ROOT/YogaSMCPane/GeneralSMCPane.swift" "$ROOT/YogaSMCPane/IdeaSMCPane.swift" \
++  "$ROOT/YogaSMCPane/ThinkSMCPane.swift" "$ROOT/YogaSMCPane/LegionSMCPane.swift" \
++  "$ROOT/YogaSMCUtils/OSDHelper.swift" "$ROOT/YogaSMCUtils/PropertyHelper.swift" \
++  "$ROOT/YogaSMCUtils/ScriptHelper.swift" "$ROOT/YogaSMCUtils/SystemPreferences.swift" \
++  -o "$PANE/Contents/MacOS/YogaSMCPane"
++
++sed -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(EXECUTABLE_NAME)/YogaSMCPane/g' \
++    -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/org.zhen.YogaSMCPane/g' -e 's/$(PRODUCT_NAME)/YogaSMCPane/g' \
++    -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/BNDL/g' -e "s/\$(CURRENT_PROJECT_VERSION)/$VER/g" \
++    -e "s/\$(MARKETING_VERSION)/$VER/g" -e "s/\$(MACOSX_DEPLOYMENT_TARGET)/$MIN/g" \
++    "$ROOT/YogaSMCPane/Info.plist" > "$PANE/Contents/Info.plist"
++# upstream's "YogaSMCPane" never resolved (NSBundle fell back to the first class in the binary)
++plutil -replace NSPrincipalClass -string YogaSMCPane.YogaSMCPane "$PANE/Contents/Info.plist"
++if grep -q '\$(' "$PANE/Contents/Info.plist"; then
++  echo "unexpanded Xcode variable in Info.plist:" >&2; grep '\$(' "$PANE/Contents/Info.plist" >&2; exit 1
++fi
++cp -R "$NIB" "$PANE/Contents/Resources/Base.lproj/"
++cp "$ROOT/YogaSMCPane/YogaSMCPane.icns" "$ROOT/YogaSMCPane/General.png" "$PANE/Contents/Resources/"
++# the pane's own strings (not the app's en.lproj); unchanged upstream since 1.5.3
++cp -R "$UPSTREAM/Contents/Resources/en.lproj" "$PANE/Contents/Resources/"
++
++codesign --force -s - "$PANE" >/dev/null
++codesign --verify "$PANE"
++file "$PANE/Contents/MacOS/YogaSMCPane"
++echo "built $PANE ($VER)"
+diff --git a/YogaSMC/YogaVPC/IdeaVPC.cpp b/YogaSMC/YogaVPC/IdeaVPC.cpp
+index 6e39f55..9f3d471 100644
+--- a/YogaSMC/YogaVPC/IdeaVPC.cpp
++++ b/YogaSMC/YogaVPC/IdeaVPC.cpp
+@@ -565,9 +565,14 @@ bool IdeaVPC::updateBattery(bool update) {
+ 
+     conservationMode = BIT(BM0_CONSERVATION_BIT) & state;
+     setProperty(conservationPrompt, conservationMode);
++    // Legion: GBMD reports the capability only while the EC allows quick charge (QCBX), re-check it
++    rapidChargeCap = BIT(BM_RAPIDCHARGE_CAP) & state;
+     if (rapidChargeCap) {
+         rapidChargeMode = BIT(BM_RAPIDCHARGE_BIT) & state;
+         setProperty(rapidChargePrompt, rapidChargeMode);
++    } else {
++        rapidChargeMode = false;
++        setProperty(rapidChargePrompt, "unsupported");
+     }
+ 
+     return true;
+@@ -657,7 +662,9 @@ bool IdeaVPC::toggleRapidCharge() {
+ 
+     rapidChargeMode = !rapidChargeMode;
+     DebugLog(toggleSuccess, rapidChargePrompt, (rapidChargeMode ? BMCMD0_RAPIDCHARGE_ON : BMCMD0_RAPIDCHARGE_OFF), (rapidChargeMode ? "on" : "off"));
+-    setProperty(rapidChargePrompt, conservationMode);
++    setProperty(rapidChargePrompt, rapidChargeMode);
++    // rapid charge on clears conservation mode in the EC (SBMC 7)
++    updateBattery(false);
+ 
+     return true;
+ }
+diff --git a/YogaSMCNC/LegionHelper.swift b/YogaSMCNC/LegionHelper.swift
+index 75080a5..d40a8dc 100644
+--- a/YogaSMCNC/LegionHelper.swift
++++ b/YogaSMCNC/LegionHelper.swift
+@@ -18,6 +18,7 @@ class LegionHelper {
+     let tempItem: NSMenuItem
+     let fanItem: NSMenuItem
+     var toggles: [(item: NSMenuItem, key: String, service: io_service_t)] = []
++    var rapidItem: NSMenuItem?
+ 
+     // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LLT PowerModeState + 1)
+     static let modes: [(value: Int, name: String)] = [
+@@ -78,6 +79,7 @@ class LegionHelper {
+         let vpcProps = getProperties(vpc) ?? [:]
+         if vpcProps["ConservationMode"] != nil { addToggle("Battery Conservation (80%)", "ConservationMode", vpc) }
+         if vpcProps["RapidChargeMode"] != nil { addToggle("Rapid Charge", "RapidChargeMode", vpc) }
++        rapidItem = toggles.first { $0.key == "RapidChargeMode" }?.item
+         if vpcProps["FnlockMode"] != nil { addToggle("Fn Lock", "FnlockMode", vpc) }
+         if vpcProps["AlwaysOnUSBMode"] != nil { addToggle("Always-on USB", "AlwaysOnUSBMode", vpc) }
+         if caps["TouchpadLock"] == true { addToggle("Touchpad Lock", "TouchpadLock", gameZone) }
+@@ -119,6 +121,18 @@ class LegionHelper {
+         for entry in toggles {
+             entry.item.state = getBoolean(entry.key, entry.service) ? .on : .off
+         }
++        // IdeaVPC publishes "unsupported" while the EC doesn't offer rapid charge
++        if let item = rapidItem {
++            let available = getProperties(vpc)?["RapidChargeMode"] is Bool
++            item.title = available ? "Rapid Charge" : "Rapid Charge (unavailable)"
++        }
++    }
++
++    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
++        if item === rapidItem {
++            return getProperties(vpc)?["RapidChargeMode"] is Bool
++        }
++        return true
+     }
+ 
+     @objc func setMode(_ sender: NSMenuItem) {
+diff --git a/YogaSMCPane/IdeaSMCPane.swift b/YogaSMCPane/IdeaSMCPane.swift
+index eddf65a..2702770 100644
+--- a/YogaSMCPane/IdeaSMCPane.swift
++++ b/YogaSMCPane/IdeaSMCPane.swift
+@@ -26,6 +26,21 @@ extension YogaSMCPane {
+         if !sendBoolean("ConservationMode", vConservationMode.state == .on, service) {
+             vConservationMode.state = getBoolean("ConservationMode", service) ? .on : .off
+         }
++        // see vRapidChargeModeSet
++        _ = sendBoolean("Update", true, service)
++        vConservationMode.state = getBoolean("ConservationMode", service) ? .on : .off
++        vRapidChargeMode.state = getBoolean("RapidChargeMode", service) ? .on : .off
++    }
++
++    // Not connected in the nib, wired in updateIdea
++    @objc func vRapidChargeModeSet(_ sender: NSButton) {
++        if !sendBoolean("RapidChargeMode", vRapidChargeMode.state == .on, service) {
++            vRapidChargeMode.state = getBoolean("RapidChargeMode", service) ? .on : .off
++        }
++        // the EC turns conservation mode off when rapid charge goes on, and the other way round
++        _ = sendBoolean("Update", true, service)
++        vConservationMode.state = getBoolean("ConservationMode", service) ? .on : .off
++        vRapidChargeMode.state = getBoolean("RapidChargeMode", service) ? .on : .off
+     }
+ 
+     func updateIdeaBattery(_ dict: NSDictionary) {
+@@ -91,6 +106,14 @@ extension YogaSMCPane {
+         if let val = props["RapidChargeMode"] as? Bool {
+             vRapidChargeMode.state = val ? .on : .off
+             vRapidChargeMode.isEnabled = true
++            vRapidChargeMode.target = self
++            vRapidChargeMode.action = #selector(vRapidChargeModeSet(_:))
++            vRapidChargeMode.toolTip = nil
++        } else {
++            // "unsupported": the nib's default state is checked, which would be misleading
++            vRapidChargeMode.state = .off
++            vRapidChargeMode.isEnabled = false
++            vRapidChargeMode.toolTip = "The EC doesn't offer rapid charge right now"
+         }
+ 
+         if let dict = props["Battery 0"] as? NSDictionary {
+diff --git a/YogaSMCPane/LegionSMCPane.swift b/YogaSMCPane/LegionSMCPane.swift
+new file mode 100644
+index 0000000..28b549e
+--- /dev/null
++++ b/YogaSMCPane/LegionSMCPane.swift
+@@ -0,0 +1,223 @@
++//
++//  LegionSMCPane.swift
++//  YogaSMCPane
++//
++//  Legion tab (power mode, sensors, Game Zone toggles), built in code so the
++//  compiled 1.5.3 nib can be reused. Talks to the IdeaWMIGameZone instance.
++//
++
++import AppKit
++import IOKit
++
++class LegionPaneController: NSObject {
++    let gameZone: io_service_t
++    let tabItem = NSTabViewItem(identifier: "Legion")
++    let modeControl = NSSegmentedControl()
++    var sensorLabels: [String: NSTextField] = [:]
++    var toggles: [(button: NSButton, key: String)] = []
++    var timer: Timer?
++
++    // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LenovoLegionToolkit PowerModeState + 1)
++    static let modes: [(value: Int, name: String)] = [
++        (1, "Quiet"), (2, "Balanced"), (3, "Performance"), (255, "Custom")
++    ]
++
++    static let sensors: [(key: String, title: String, unit: String)] = [
++        ("CPU Temperature", "CPU", "°C"),
++        ("GPU Temperature", "GPU", "°C"),
++        ("PCH Temperature", "Chipset", "°C"),
++        ("CPU Fan", "CPU fan", " rpm"),
++        ("GPU Fan", "GPU fan", " rpm")
++    ]
++
++    static let toggleList: [(key: String, title: String, note: String?)] = [
++        ("TouchpadLock", "Touchpad Lock", nil),
++        ("WinKeyLock", "Disable Win (⌘) Key", "Also disables Command, the Windows key on macOS."),
++        ("OverDrive", "Display Overdrive", nil)
++    ]
++
++    static func create() -> LegionPaneController? {
++        let service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IdeaWMIGameZone"))
++        guard service != 0 else { return nil }
++        return LegionPaneController(service)
++    }
++
++    init(_ service: io_service_t) {
++        gameZone = service
++        super.init()
++        tabItem.label = "Legion"
++        tabItem.view = buildView()
++        update()
++    }
++
++    deinit {
++        stop()
++        IOObjectRelease(gameZone)
++    }
++
++    // MARK: - Layout
++
++    private func header(_ title: String) -> NSTextField {
++        let label = NSTextField(labelWithString: title)
++        label.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
++        return label
++    }
++
++    private func note(_ text: String) -> NSTextField {
++        let label = NSTextField(wrappingLabelWithString: text)
++        label.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
++        label.textColor = .secondaryLabelColor
++        label.preferredMaxLayoutWidth = 280
++        return label
++    }
++
++    private func buildView() -> NSView {
++        let caps = getDictionary("Legion Capabilities", gameZone) as? [String: Bool] ?? [:]
++        let root = NSView(frame: NSRect(x: 0, y: 0, width: 622, height: 306))
++
++        // Left column: power mode and toggles
++        let left = NSStackView()
++        left.orientation = .vertical
++        left.alignment = .leading
++        left.spacing = 8
++
++        left.addArrangedSubview(header("Power Mode"))
++        modeControl.segmentCount = LegionPaneController.modes.count
++        for (index, mode) in LegionPaneController.modes.enumerated() {
++            modeControl.setLabel(mode.name, forSegment: index)
++            modeControl.setWidth(0, forSegment: index)
++        }
++        modeControl.trackingMode = .selectOne
++        modeControl.target = self
++        modeControl.action = #selector(modeChanged(_:))
++        modeControl.isEnabled = caps["PowerMode"] == true
++        left.addArrangedSubview(modeControl)
++        left.addArrangedSubview(note("Same setting as Fn+Q. Custom uses the custom profile stored in the BIOS."))
++        left.setCustomSpacing(18, after: left.arrangedSubviews.last!)
++
++        left.addArrangedSubview(header("Keyboard & Touchpad"))
++        var anyToggle = false
++        for entry in LegionPaneController.toggleList where caps[entry.key] == true {
++            let button = NSButton(checkboxWithTitle: entry.title, target: self, action: #selector(toggled(_:)))
++            button.tag = toggles.count
++            toggles.append((button, entry.key))
++            left.addArrangedSubview(button)
++            if let text = entry.note {
++                left.addArrangedSubview(note(text))
++            }
++            anyToggle = true
++        }
++        if !anyToggle {
++            left.addArrangedSubview(note("Not supported by this BIOS."))
++        }
++        left.setCustomSpacing(18, after: left.arrangedSubviews.last!)
++        left.addArrangedSubview(note("Battery conservation, rapid charge, Fn lock and always-on USB are on the Idea tab."))
++
++        // Right column: sensors
++        let grid = NSGridView(numberOfColumns: 2, rows: 0)
++        grid.rowSpacing = 8
++        grid.columnSpacing = 24
++        for sensor in LegionPaneController.sensors {
++            let value = NSTextField(labelWithString: "–")
++            value.alignment = .right
++            value.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
++            sensorLabels[sensor.key] = value
++            grid.addRow(with: [NSTextField(labelWithString: sensor.title), value])
++        }
++        grid.column(at: 1).xPlacement = .trailing
++        grid.setContentHuggingPriority(.required, for: .vertical)
++
++        let right = NSStackView()
++        right.orientation = .vertical
++        right.alignment = .leading
++        right.spacing = 8
++        right.addArrangedSubview(header("Sensors"))
++        right.addArrangedSubview(grid)
++        let sensorNote = note("Read from the EC through LENOVO_OTHER_METHOD, refreshed every 2 seconds while this tab is open. Also published as SMC keys for monitoring apps.")
++        sensorNote.preferredMaxLayoutWidth = 230
++        right.addArrangedSubview(sensorNote)
++        right.setHuggingPriority(.required, for: .vertical)
++
++        let columns = NSStackView(views: [left, right])
++        columns.orientation = .horizontal
++        columns.alignment = .top
++        columns.spacing = 40
++        columns.translatesAutoresizingMaskIntoConstraints = false
++        root.addSubview(columns)
++        NSLayoutConstraint.activate([
++            columns.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
++            columns.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
++            columns.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
++            left.widthAnchor.constraint(equalToConstant: 290),
++            right.widthAnchor.constraint(equalToConstant: 230),
++            grid.widthAnchor.constraint(equalTo: right.widthAnchor)
++        ])
++        return root
++    }
++
++    // MARK: - State
++
++    func start() {
++        update()
++        guard timer == nil else { return }
++        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
++            self?.update()
++        }
++    }
++
++    func stop() {
++        timer?.invalidate()
++        timer = nil
++    }
++
++    func update() {
++        _ = sendBoolean("UpdateSensors", true, gameZone)
++        _ = sendBoolean("Update", true, gameZone)
++
++        let mode = getNumber("PowerMode", gameZone)
++        if let index = LegionPaneController.modes.firstIndex(where: { $0.value == mode }) {
++            modeControl.selectedSegment = index
++        } else {
++            modeControl.selectedSegment = -1
++        }
++
++        let values = getDictionary("Legion Sensors", gameZone) as? [String: Int] ?? [:]
++        for sensor in LegionPaneController.sensors {
++            if let value = values[sensor.key] {
++                sensorLabels[sensor.key]?.stringValue = "\(value)\(sensor.unit)"
++            } else {
++                sensorLabels[sensor.key]?.stringValue = "–"
++            }
++        }
++
++        for entry in toggles {
++            entry.button.state = getBoolean(entry.key, gameZone) ? .on : .off
++        }
++    }
++
++    @objc func modeChanged(_ sender: NSSegmentedControl) {
++        let index = sender.selectedSegment
++        guard index >= 0, index < LegionPaneController.modes.count else { return }
++        _ = sendNumber("PowerMode", LegionPaneController.modes[index].value, gameZone)
++        update()
++    }
++
++    @objc func toggled(_ sender: NSButton) {
++        guard sender.tag < toggles.count else { return }
++        _ = sendBoolean(toggles[sender.tag].key, sender.state == .on, gameZone)
++        update()
++    }
++}
++
++extension YogaSMCPane {
++    func updateLegion() {
++        if legionController == nil {
++            legionController = LegionPaneController.create()
++        }
++        guard let controller = legionController else { return }
++        if mainTabView.indexOfTabViewItem(controller.tabItem) == NSNotFound {
++            mainTabView.addTabViewItem(controller.tabItem)
++        }
++        controller.start()
++    }
++}
+diff --git a/YogaSMCPane/YogaSMCPane.swift b/YogaSMCPane/YogaSMCPane.swift
+index b3824b1..48524d3 100644
+--- a/YogaSMCPane/YogaSMCPane.swift
++++ b/YogaSMCPane/YogaSMCPane.swift
+@@ -22,6 +22,19 @@ class YogaSMCPane: NSPreferencePane {
+ 
+     var thinkBatteryNumber = -1
+ 
++    // Legion tab, added in code when IdeaWMIGameZone is present
++    var legionController: LegionPaneController?
++
++    // Tabs removed from mainTabView stay alive here: their controls are weak outlets that
++    // updateMain still touches, and a freed tab crashed the pane on the second willSelect
++    var removedTabs: [NSTabViewItem] = []
++
++    func removeTab(_ item: NSTabViewItem?) {
++        guard let item = item, mainTabView.indexOfTabViewItem(item) != NSNotFound else { return }
++        removedTabs.append(item)
++        mainTabView.removeTabViewItem(item)
++    }
++
+     @IBOutlet weak var vVersion: NSTextField!
+     @IBOutlet weak var vClass: NSTextField!
+     @IBOutlet weak var vECRead: NSTextField!
+@@ -132,6 +145,10 @@ class YogaSMCPane: NSPreferencePane {
+         // nothing
+     }
+ 
++    override func didUnselect() {
++        legionController?.stop()
++    }
++
+     override func willSelect() {
+         guard service != 0, sendBoolean("Update", true, service) else { return }
+ 
+@@ -166,23 +183,24 @@ class YogaSMCPane: NSPreferencePane {
+         case "IdeaVPC":
+             vClass.stringValue = "Idea"
+             updateIdea(props)
++            updateLegion()
+             #if !DEBUG
+-            mainTabView.removeTabViewItem(thinkViewItem)
++            removeTab(thinkViewItem)
+             #endif
+         case "ThinkVPC":
+             vClass.stringValue = "Think"
+             updateThink(props)
+             #if !DEBUG
+-            mainTabView.removeTabViewItem(ideaViewItem)
++            removeTab(ideaViewItem)
+             #endif
+         case "YogaHIDD":
+             vClass.stringValue = "HIDD"
+-            mainTabView.removeTabViewItem(ideaViewItem)
+-            mainTabView.removeTabViewItem(thinkViewItem)
++            removeTab(ideaViewItem)
++            removeTab(thinkViewItem)
+         default:
+             vClass.stringValue = "Unsupported"
+-            mainTabView.removeTabViewItem(ideaViewItem)
+-            mainTabView.removeTabViewItem(thinkViewItem)
++            removeTab(ideaViewItem)
++            removeTab(thinkViewItem)
+         }
+     }
+ }
+-- 
+2.39.5 (Apple Git-154)
+
