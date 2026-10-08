@@ -837,9 +837,9 @@
 				<key>Arch</key>
 				<string>x86_64</string>
 				<key>BundlePath</key>
-				<string>YogaSMC-Legion.kext</string>
+				<string>YogaSMC.kext</string>
 				<key>Comment</key>
-				<string>YogaSMC 1.6.0 Legion build (Game Zone power mode, fans, temps, toggles). Fallback YogaSMC.kext 1.5.3</string>
+				<string>YogaSMC 1.5.3 (Lenovo VPC2004/GZFD: Fn keys, battery conservation, sensors)</string>
 				<key>Enabled</key>
 				<true/>
 				<key>ExecutablePath</key>
@@ -1122,7 +1122,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth -nvrmnobootscreen amfi_get_out_of_my_way=0x1 amfi=0x80</string>
+				<string>-v -x -nvoff nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth amfi_get_out_of_my_way=0x1 amfi=0x80</string>
 				<key>csr-active-config</key>
 				<data>
 				QwoAAA==

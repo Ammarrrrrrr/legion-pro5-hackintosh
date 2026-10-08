@@ -18,16 +18,19 @@
 
 | File | Role |
 |---|---|
-| `config.plist` | **Everyday config.** Identical to `config-fastboot.plist`. |
+| `config.plist` | **Everyday config.** Identical to `config-yogasmc-legion.plist`. |
+| `config-yogasmc-legion.plist` | `config-fastboot.plist` with `YogaSMC-Legion.kext` (1.6.0 Legion build) instead of `YogaSMC.kext` 1.5.3. Nothing else differs. |
 | `config-fastboot.plist` | `config-rgbfix.plist` without the debug boot-args, plus `-nvrmnobootscreen` and a hidden picker (`ShowPicker false`, `Timeout 0`, `TakeoffDelay 10000`) |
 | `config-rgbfix.plist` | `config-yogasmc.plist` + `LegionRGBUSBFix.kext`. Verbose boot with the picker: the first fallback. |
 | `config-yogasmc.plist` | `config-airportitlwm.plist` + `YogaSMC.kext` |
 | `config-airportitlwm.plist` | `config-identity.plist` + native Wi-Fi (AirportItlwm enabled, itlwm disabled) + `SystemMemoryStatus Upgradable` |
 | `config-identity.plist` | Previous everyday config: itlwm + HeliPort for Wi-Fi, own Mac identity |
 | `config-fast-trackpad-gpio.plist` | Like `config-identity.plist`, but without the Mac identity fix (`CustomSMBIOSGuid` off) |
+| `config-v110-normal.plist` | Identical to `config-fastboot.plist` (kept from the NullMoth 1.1.0 test) |
+| `config-safe-110.plist` | `config-fastboot.plist` with `-v -x -nvoff` and without `-nvrmnobootscreen`: Safe Mode recovery used during the NullMoth 1.1.0 240 Hz test |
 | `config-safe-nvoff.plist` | **Recovery:** Safe Mode (`-x`) + `-nvoff`. The NVIDIA driver doesn't load, giving an unaccelerated desktop to repair things from. Same kexts as `config-identity.plist`, so the trackpad works there too. |
 
-All eight pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repository the identity values (`SystemSerialNumber`, `MLB`, `SystemUUID`, `ROM`) are OpenCore's sample placeholders.
+All eleven pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repository the identity values (`SystemSerialNumber`, `MLB`, `SystemUUID`, `ROM`) are OpenCore's sample placeholders.
 
 ## Key settings (everyday config)
 
@@ -80,7 +83,7 @@ UEFI drivers: `OpenRuntime`, `OpenCanopy`, `ResetNvramEntry` (all OpenCore 1.0.8
 | 21 | VoodooI2CHID | 1.0 (from VoodooI2C 2.9.1) | ✅ | |
 | 22, 24 | VoodooPS2Controller + VoodooPS2Keyboard | 2.3.8 | ✅ | acidanthera |
 | 28–29 | USBToolBox + UTBMap | 1.2.0 / 1.1 | ✅ | USBToolBox; UTBMap is the Legion EFI's port map |
-| 30 | YogaSMC | 1.5.3 | ✅ | zhen-zen; Lenovo `VPC2004` (`IdeaVPC`) and Game Zone WMI, see [power-sleep.md](power-sleep.md#lenovo-features-yogasmc) |
+| 30 | YogaSMC | 1.6.0 Legion build | ✅ | `YogaSMC-Legion.kext` in `config.plist` / `config-yogasmc-legion.plist`; every other config loads the stock `YogaSMC.kext` 1.5.3 (zhen-zen). Lenovo `VPC2004` (`IdeaVPC`) and Game Zone WMI, see [power-sleep.md](power-sleep.md#lenovo-features-yogasmc) |
 | 31 | LegionRGBUSBFix (codeless) | 1.0.0 | ✅ | Gives interface 1 of the ITE 8295 RGB controller (`048d:c995`) a do-nothing driver so macOS stops resetting it every 0.6 s; see camera-audio-memory-usb.md |
 | 27 | itlwm | 2.3.0 | off | used before AirportItlwm, with HeliPort |
 | 23, 25–26 | VoodooInput, VoodooPS2Mouse, VoodooPS2Trackpad (plug-ins inside VoodooPS2Controller) | 2.3.8 | off | not needed with the I2C trackpad |

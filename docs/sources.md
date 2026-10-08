@@ -19,6 +19,9 @@ Every external component, where it came from and how it was verified. SHA-256 va
 | AirportItlwm (Sequoia) | 2.4.0-alpha (`9bc4b4d`) | `AirportItlwm-Sequoia-v2.4.0-RELEASE-alpha-9bc4b4d.zip` | `53b4eba2fd67ba37ff850a0b5fb55a3012049b08cf4f15b7c73dac206aab5355` | https://github.com/laobamac/itlwm/releases |
 | YogaSMC (kext) | 1.5.3 | `YogaSMC-Release.zip` | `d212edf601a6f7722f60e63a572ed3e689430d89fdae8a0f5365c8d6f799768e` | https://github.com/zhen-zen/YogaSMC/releases (no published digest for this 2022 release; hash taken after download) |
 | YogaSMC (apps) | 1.5.3 | `YogaSMC-App-Release.dmg` | `48a664f67f0523fd8e2ed572ceb504debe318778a777a726a9882178e0e967e7` | same |
+| Lilu SDK (for building YogaSMC, 2026-10-09) | 1.7.2 | `Lilu-1.7.2-DEBUG.zip` | `e95df95d82e8b151047abf359ecd9c853755c59293e19dfcc3907da8fbd8cf89` | https://github.com/acidanthera/Lilu/releases |
+| VirtualSMC SDK (for building YogaSMC, 2026-10-09) | 1.3.8 | `VirtualSMC-1.3.8-DEBUG.zip` | `d1a13a4ad5564f97d4fa4cb584eaa63cb4fbe280c6997100133789dd4bdac200` | https://github.com/acidanthera/VirtualSMC/releases |
+| iasl (from MaciASL, 2026-10-09; `iasl-stable` 20200925) | 1.6.5 | `MaciASL-1.6.5-RELEASE.dmg` | `67071f4e91167360e4881ed2532cf6cc3cdcc4850b1ccbcaf4e13f270465f878` | https://github.com/acidanthera/MaciASL/releases |
 
 ## Built from source on this machine (Command Line Tools)
 
@@ -26,6 +29,8 @@ Every external component, where it came from and how it was verified. SHA-256 va
 |---|---|---|---|
 | VoodooGPIO with `VoodooGPIOAlderLakeS` (`INTC1085`) | https://github.com/victorwitkamp/VoodooGPIO | `b53f717` (2026-09-22) | `tools/trackpad/build-voodoogpio.sh` with acidanthera MacKernelSDK (master, cloned 2026-10-08) |
 | macserial | https://github.com/acidanthera/OpenCorePkg (`Utilities/macserial`) | `963025f` (2026-09-30) | `make` |
+| YogaSMC 1.6.0 Legion build (kext + YogaSMCNC app) | https://github.com/zhen-zen/YogaSMC + `tools/yogasmc/0001-Legion-Game-Zone-support.patch` | `299907b` (2024-05-05) | `Tools/build-kext.sh` / `Tools/build-app.sh` from the patch, with MacKernelSDK `3f75008` (2026-09-23) and the SDK kexts below; see [tools/yogasmc/](../tools/yogasmc/) |
+| `yogactl`, `smckeys` | `tools/yogasmc/` | this repository | `clang` (see the README there) |
 
 ## Modified
 

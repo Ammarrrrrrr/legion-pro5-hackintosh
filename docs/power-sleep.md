@@ -37,13 +37,41 @@ Consequences:
 
 ## Battery
 
-SMCBatteryManager reports the battery normally. It sits at about 82% with "AC attached; not charging" because **Lenovo conservation mode** stops charging around 80%. That mode is set in Lenovo Vantage on Windows and enforced by the EC. Turn it off there for a full charge.
+SMCBatteryManager reports the battery normally. It sits at about 82% with "AC attached; not charging" because **Lenovo conservation mode** stops charging around 80%. That mode is enforced by the EC. Turn it off for a full charge, either in Lenovo Vantage on Windows or with "Battery Conservation" in the YogaSMCNC menu on macOS.
 
 ## Lenovo features (YogaSMC)
 
-YogaSMC 1.5.3 ([zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC), the last release) loads from the EFI. Its `IdeaVPC` driver attaches to `VPC0` (`VPC2004`) under `EC0` and reports `ConservationMode`, `RapidChargeMode`, `FnlockMode` and battery details in ioreg. Its WMI part found the Game Zone (`GZFD`), battery and Fn+S devices. The EC sensor names in its default list don't exist on this EC (`DirectECKey` all `No`), so expect no extra temperature readings from it.
+`config.plist` loads **YogaSMC 1.6.0, a Legion build** of [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) (upstream master `299907b` plus one patch, kept in [`tools/yogasmc/`](../tools/yogasmc/)). Every other config still loads the stock 1.5.3 release.
 
-Control it with the menu bar app `/Applications/YogaSMCNC.app` or the pane at the bottom of System Settings (`~/Library/PreferencePanes/YogaSMCPane.prefPane`). Battery conservation mode (stop at about 80%) set here is the same EC setting as in Lenovo Vantage. The downloads and their SHA-256 are in `YogaSMC/1.5.3/` on the stick.
+### Why stock YogaSMC wasn't enough
+
+Stock 1.5.3 attaches `IdeaVPC` to `VPC0` (`VPC2004`) and handles Fn-lock, battery conservation and rapid charge. Its Game Zone code calls the old `LENOVO_GAMEZONE_DATA` getters (fan count, fan speeds, CPU/GPU temperature). On this BIOS (`N0CN29WW`, Game Zone version 16) `WMAA` has no branch for most of them, and `GetCPUTemp`/`GetGPUTemp` return a hard-coded 0, so it published no sensors. LenovoLegionToolkit (LLT) reads Gen 7+ Legions through the newer `LENOVO_OTHER_METHOD` instead.
+
+### What the Legion build adds
+
+| Feature | Firmware interface (from the BMOF on `GZFD` and LLT) |
+|---|---|
+| Power mode Quiet / Balanced / Performance / Custom, read and set | `LENOVO_GAMEZONE_DATA` 45 `GetSmartFanMode`, 44 `SetSmartFanMode` (values 1, 2, 3, 255) |
+| Fn+Q on-screen popup with the new mode | Fn+Q EC query does `Notify (GZFD, 0xE3)` (smart fan mode event), then `0xE7` (thermal mode) |
+| CPU and GPU fan speed (rpm) | `LENOVO_OTHER_METHOD` 17 `GetFeatureValue` `0x04030001` / `0x04030002` |
+| CPU, GPU and PCH temperature | `GetFeatureValue` `0x05040000` / `0x05050000` / `0x05010000` |
+| Touchpad lock, Win key lock | Game Zone 24–26 and 21–23 (the BIOS reports both as supported) |
+| Display overdrive | not supported on this panel (`IsSupportOD` = 0), hidden |
+
+The sensors are published as VirtualSMC keys, so monitoring apps see them: `FNum` = 2, `F0Ac` / `F1Ac` (fans), `TCXC` (CPU), `TG0P` and `TG0D` (GPU), `TPCD` (PCH). SMCProcessor keeps providing the per-core CPU temperatures.
+
+Verified on 2026-10-09: fans around 1,900 rpm idle, temperatures live, Quiet → Balanced → Performance → Quiet switched from macOS (the firmware's thermal mode follows), Fn+Q shows the popup, menu bar section works.
+
+### Using it
+
+- **Menu bar:** `/Applications/YogaSMCNC.app` (1.6.0, same build). The top of its menu has the power mode submenu, temperatures, fan speeds and toggles for battery conservation (stop at about 80%, the same EC setting as Lenovo Vantage), rapid charge, Fn lock, always-on USB, touchpad lock and "Disable Win (⌘) Key". It isn't a login item by default; use "Start at Login" in its menu.
+- **Shell:** `yogactl mode [quiet|balanced|performance|custom]`, `yogactl sensors`, `yogactl probe` (every read-only getter), `yogactl acpi DSDT dsdt.aml`. `smckeys F` / `smckeys TG0P` read the SMC keys. Both are built from `tools/yogasmc/` into `~/.local/bin`. No root needed.
+- **Caveats:** "Disable Win (⌘) Key" disables Command, because that is the Windows key on macOS. Touchpad lock is an EC feature and may not affect the I2C touchpad.
+- The System Settings pane (`~/Library/PreferencePanes/YogaSMCPane.prefPane`) is still the 1.5.3 one; it has no Legion controls.
+
+### Building
+
+The build needs no Xcode. `tools/yogasmc/README.md` has the steps: apply the patch to upstream, put the Lilu 1.7.2 and VirtualSMC 1.3.8 DEBUG SDK kexts and acidanthera MacKernelSDK in the repo root, then run `Tools/build-kext.sh` and `Tools/build-app.sh`. The kext's imports match the official 1.5.3 binary.
 
 ## CPU power management
 

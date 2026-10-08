@@ -22,7 +22,7 @@ The OpenCore EFI in `EFI/` is the exact working copy. The only difference is tha
 | Bluetooth | ✅ | IntelBluetoothFirmware + IntelBTPatcher + BlueToolFixup |
 | Keyboard | ✅ PS/2 | VoodooPS2 |
 | Keyboard lighting | ✅ 4-zone RGB | USB map change + `LegionRGBUSBFix.kext`; app in the private repo [legion-rgb-macos](https://github.com/Ammarrrrrrr/legion-rgb-macos) |
-| Lenovo features | ✅ driver loaded | YogaSMC 1.5.3 (`IdeaVPC`, Game Zone WMI): Fn-lock, battery conservation and rapid charge. Not every feature tested. |
+| Lenovo features | ✅ power mode, fans, temperatures, battery and keyboard toggles | YogaSMC 1.6.0 "Legion" build (own patch, modelled on LenovoLegionToolkit): Fn+Q power mode with on-screen popup, both fan speeds and CPU/GPU/PCH temperatures as SMC keys, menu bar controls. See [docs/power-sleep.md](docs/power-sleep.md#lenovo-features-yogasmc). |
 | Audio | ✅ devices present (speakers, mic) | AppleALC layout-id 99. Headphone jack not tested. |
 | Camera | ✅ QuickTime, FaceTime, browsers | Photo Booth stays black (driver gap). The laptop's physical camera switch must be open. |
 | Battery, USB, NVMe, Ethernet | ✅ | SMCBatteryManager, USBToolBox + UTBMap, NVMeFix, RealtekRTL8111 |

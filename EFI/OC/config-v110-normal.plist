@@ -837,9 +837,9 @@
 				<key>Arch</key>
 				<string>x86_64</string>
 				<key>BundlePath</key>
-				<string>YogaSMC-Legion.kext</string>
+				<string>YogaSMC.kext</string>
 				<key>Comment</key>
-				<string>YogaSMC 1.6.0 Legion build (Game Zone power mode, fans, temps, toggles). Fallback YogaSMC.kext 1.5.3</string>
+				<string>YogaSMC 1.5.3 (Lenovo VPC2004/GZFD: Fn keys, battery conservation, sensors)</string>
 				<key>Enabled</key>
 				<true/>
 				<key>ExecutablePath</key>

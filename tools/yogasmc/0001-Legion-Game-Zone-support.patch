@@ -1,0 +1,1698 @@
+From 2e6f62806d4a9c34a49962ba1d1f0bca357ff646 Mon Sep 17 00:00:00 2001
+From: ammar <surfmemo58@gmail.com>
+Date: Fri, 9 Oct 2026 01:43:29 +0300
+Subject: [PATCH] Legion Game Zone support (LenovoLegionToolkit-derived) +
+ CLT-only build
+
+Kext (IdeaWMIGameZone / IdeaSMC / IdeaVPC):
+- Power mode (Fn+Q smart fan mode) get/set via LENOVO_GAMEZONE_DATA 44/45,
+  SMART_FAN_MODE / THERMAL / KEYLOCK / CHARGE / LIGHT events, WExx enabled
+- Touchpad lock, Win key lock, display overdrive toggles, IGPU mode (read only)
+- Sensors from LENOVO_OTHER_METHOD GetFeatureValue (LLT CapabilityID) with
+  Game Zone fallback; IdeaSMC publishes F0Ac/F1Ac/FNum/F0Mx, TCXC, TG0P/TG0D, TPCD
+- Read-only debug interface: WMIQuery, WMIBlock, ProbeAll, DumpACPI
+- Fixed Game Zone method ids 0x2E-0x30 to match the BMOF
+- Events forwarded to YogaSMCNC as 0x20-0x25 (kSMC_LegionEvent)
+
+YogaSMCNC: Legion menu section (power mode, temps/fans, battery/keyboard toggles)
+
+Tools: build-kext.sh / build-app.sh (no Xcode), yogactl, smckeys
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Tools/build-app.sh               |  62 +++
+ Tools/build-kext.sh              |  70 ++++
+ Tools/smckeys.c                  |  51 +++
+ Tools/yogactl.c                  | 200 ++++++++++
+ YogaSMC/KeyImplementations.hpp   |   1 +
+ YogaSMC/YogaSMC/IdeaSMC.cpp      |  72 ++--
+ YogaSMC/YogaVPC/IdeaVPC.cpp      |  11 +-
+ YogaSMC/YogaWMI/IdeaWMI.cpp      | 634 ++++++++++++++++++++++++++++++-
+ YogaSMC/YogaWMI/IdeaWMI.hpp      | 162 +++++++-
+ YogaSMC/message.h                |   3 +-
+ YogaSMCNC/AppDelegate.swift      |  16 +
+ YogaSMCNC/LegionHelper.swift     | 140 +++++++
+ YogaSMCUtils/Configuration.swift |  16 +-
+ 13 files changed, 1391 insertions(+), 47 deletions(-)
+ create mode 100755 Tools/build-app.sh
+ create mode 100755 Tools/build-kext.sh
+ create mode 100644 Tools/smckeys.c
+ create mode 100644 Tools/yogactl.c
+ create mode 100644 YogaSMCNC/LegionHelper.swift
+
+diff --git a/Tools/build-app.sh b/Tools/build-app.sh
+new file mode 100755
+index 0000000..ee2d6a0
+--- /dev/null
++++ b/Tools/build-app.sh
+@@ -0,0 +1,62 @@
++#!/bin/bash
++# Builds YogaSMCNC.app with the Command Line Tools only (no Xcode).
++# swiftc compiles the Swift sources; the compiled Main.storyboardc (a menu + AppDelegate outlet,
++# unchanged since upstream 1.5.3) is reused from the upstream 1.5.3 release app, because ibtool
++# only ships with Xcode. The login-item helper is compiled from source.
++#
++# Usage: Tools/build-app.sh [version] [upstream 1.5.3 YogaSMCNC.app] [output dir]
++set -euo pipefail
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++VER=${1:-1.6.0}
++UPSTREAM=${2:-$ROOT/build/upstream-1.5.3/YogaSMCNC.app}
++OUT=${3:-$ROOT/build/Release}
++MIN=11.0
++APP=$OUT/YogaSMCNC.app
++[ -d "$UPSTREAM/Contents/Resources/Base.lproj/Main.storyboardc" ] || { echo "missing upstream storyboard in $UPSTREAM" >&2; exit 1; }
++
++rm -rf "$APP"
++mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Base.lproj" "$APP/Contents/Library/LoginItems"
++OBJ=$OUT/obj-YogaSMCNC; rm -rf "$OBJ"; mkdir -p "$OBJ"
++
++SWIFTFLAGS=(-O -swift-version 5 -target "x86_64-apple-macos$MIN" -sdk "$(xcrun --show-sdk-path)"
++            -F "$ROOT/Frameworks" -F "$(xcrun --show-sdk-path)/System/Library/PrivateFrameworks"
++            -suppress-warnings)
++
++echo "  swiftc YogaSMCNC"
++swiftc "${SWIFTFLAGS[@]}" -module-name YogaSMCNC \
++  -import-objc-header "$ROOT/YogaSMCUtils/YogaSMC-Bridging-Header.h" \
++  -framework AppKit -framework IOKit -framework CoreWLAN -framework IOBluetooth -framework NotificationCenter \
++  -framework ServiceManagement -framework CoreGraphics -framework OSD -framework Carbon -framework CoreAudio \
++  -framework ScriptingBridge \
++  "$ROOT"/YogaSMCNC/*.swift "$ROOT"/YogaSMCUtils/*.swift \
++  -o "$APP/Contents/MacOS/YogaSMCNC"
++
++sed -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(EXECUTABLE_NAME)/YogaSMCNC/g' \
++    -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/org.zhen.YogaSMCNC/g' -e 's/$(PRODUCT_NAME)/YogaSMCNC/g' \
++    -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' -e "s/\$(CURRENT_PROJECT_VERSION)/$VER/g" \
++    -e "s/\$(MARKETING_VERSION)/$VER/g" -e "s/\$(MACOSX_DEPLOYMENT_TARGET)/$MIN/g" \
++    "$ROOT/YogaSMCNC/Info.plist" > "$APP/Contents/Info.plist"
++if grep -q '\$(' "$APP/Contents/Info.plist"; then
++  echo "unexpanded Xcode variable in Info.plist:" >&2; grep '\$(' "$APP/Contents/Info.plist" >&2; exit 1
++fi
++printf 'APPL????' > "$APP/Contents/PkgInfo"
++cp "$ROOT"/YogaSMCNC/Resources/*.pdf "$APP/Contents/Resources/"
++cp -R "$UPSTREAM/Contents/Resources/Base.lproj/Main.storyboardc" "$APP/Contents/Resources/Base.lproj/"
++cp -R "$ROOT/en.lproj" "$APP/Contents/Resources/"
++
++HELPER=$APP/Contents/Library/LoginItems/YogaSMCNCHelper.app
++mkdir -p "$HELPER/Contents/MacOS"
++echo "  swiftc YogaSMCNCHelper"
++swiftc "${SWIFTFLAGS[@]}" -module-name YogaSMCNCHelper -framework AppKit \
++  "$ROOT/YogaSMCNCHelper/main.swift" -o "$HELPER/Contents/MacOS/YogaSMCNCHelper"
++sed -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(EXECUTABLE_NAME)/YogaSMCNCHelper/g' \
++    -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/org.zhen.YogaSMCNCHelper/g' -e 's/$(PRODUCT_NAME)/YogaSMCNCHelper/g' \
++    -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' -e "s/\$(CURRENT_PROJECT_VERSION)/$VER/g" \
++    -e "s/\$(MARKETING_VERSION)/$VER/g" -e "s/\$(MACOSX_DEPLOYMENT_TARGET)/$MIN/g" \
++    "$ROOT/YogaSMCNCHelper/Info.plist" > "$HELPER/Contents/Info.plist"
++printf 'APPL????' > "$HELPER/Contents/PkgInfo"
++
++codesign --force -s - "$HELPER" >/dev/null
++codesign --force -s - "$APP" >/dev/null
++codesign --verify --deep "$APP"
++echo "built $APP ($VER)"
+diff --git a/Tools/build-kext.sh b/Tools/build-kext.sh
+new file mode 100755
+index 0000000..01ac59b
+--- /dev/null
++++ b/Tools/build-kext.sh
+@@ -0,0 +1,70 @@
++#!/bin/bash
++# Builds YogaSMC.kext with the Command Line Tools only (no Xcode), mirroring the Xcode
++# "YogaSMC" target: x86_64, gnu++14 kernel C++, MacKernelSDK + Lilu/VirtualSMC SDK headers,
++# libkmod, kmod_info with MODULE_START/MODULE_STOP, Info.plist with the Xcode variables filled in.
++#
++# Expects in the repo root (same layout as the Xcode project / CI):
++#   MacKernelSDK/   (git clone https://github.com/acidanthera/MacKernelSDK)
++#   Lilu.kext/      (from Lilu-<ver>-DEBUG.zip)
++#   VirtualSMC.kext (from VirtualSMC-<ver>-DEBUG.zip, Kexts/VirtualSMC.kext)
++#
++# Usage: Tools/build-kext.sh [version] [output dir]   (default 1.6.0, build/Release)
++set -euo pipefail
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++VER=${1:-1.6.0}
++OUT=${2:-$ROOT/build/Release}
++NAME=YogaSMC; ID=org.zhen.YogaSMC
++SDK=$ROOT/MacKernelSDK; SRC=$ROOT/YogaSMC
++for d in "$SDK/Headers" "$ROOT/Lilu.kext/Contents/Resources/Headers" "$ROOT/VirtualSMC.kext/Contents/Resources/VirtualSMCSDK"; do
++  [ -d "$d" ] || { echo "missing $d" >&2; exit 1; }
++done
++
++OBJ=$OUT/obj-$NAME
++rm -rf "$OBJ" "$OUT/$NAME.kext"; mkdir -p "$OBJ" "$OUT/$NAME.kext/Contents/MacOS"
++
++COMMON=(-arch x86_64 -mmacosx-version-min=10.9 -mkernel -nostdinc -fno-builtin -fno-common
++        -mno-red-zone -fno-stack-protector -fno-strict-aliasing -Os -g0
++        -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT
++        "-DMODULE_VERSION=$VER" "-DPRODUCT_NAME=$NAME"
++        -I"$SDK/Headers" -I"$ROOT/Lilu.kext/Contents/Resources" -I"$ROOT/VirtualSMC.kext/Contents/Resources" -I"$SRC" -I"$SRC/YogaSMC" -I"$SRC/YogaVPC" -I"$SRC/YogaWMI"
++        -Wno-deprecated-declarations -Wno-sign-conversion)
++CXX=(-x c++ -std=gnu++14 -fapple-kext -nostdinc++ -fno-exceptions -fno-rtti -Wno-inconsistent-missing-override)
++
++objs=()
++while IFS= read -r f; do
++  rel=${f#$SRC/}; o="$OBJ/${rel//\//_}.o"
++  case "$f" in
++    *.cpp) echo "  c++  $rel"; clang "${COMMON[@]}" "${CXX[@]}" -c "$f" -o "$o" ;;
++    *.c)   echo "  cc   $rel"; clang "${COMMON[@]}" -x c -std=gnu11 -c "$f" -o "$o" ;;
++  esac
++  objs+=("$o")
++done < <(find "$SRC" \( -name '*.cpp' -o -name '*.c' \) -not -path '*/SSDTSample/*' | sort)
++
++cat > "$OBJ/kmod_info.c" <<EOF
++#include <mach/mach_types.h>
++extern kern_return_t _start(kmod_info_t *ki, void *data);
++extern kern_return_t _stop(kmod_info_t *ki, void *data);
++extern kern_return_t ${NAME}_kern_start(kmod_info_t *ki, void *data);
++extern kern_return_t ${NAME}_kern_stop(kmod_info_t *ki, void *data);
++__attribute__((visibility("default"))) KMOD_EXPLICIT_DECL($ID, "$VER", _start, _stop)
++__private_extern__ kmod_start_func_t *_realmain = ${NAME}_kern_start;
++__private_extern__ kmod_stop_func_t *_antimain = ${NAME}_kern_stop;
++__private_extern__ int _kext_apple_cc = __APPLE_CC__;
++EOF
++echo "  cc   kmod_info.c"
++clang "${COMMON[@]}" -x c -std=gnu11 -c "$OBJ/kmod_info.c" -o "$OBJ/kmod_info.o"
++
++echo "  ld   $NAME"
++clang++ -arch x86_64 -mmacosx-version-min=10.9 -mkernel -fapple-kext -nostdlib \
++  -Xlinker -kext -L"$SDK/Library/x86_64" -lkmod \
++  "${objs[@]}" "$OBJ/kmod_info.o" -o "$OUT/$NAME.kext/Contents/MacOS/$NAME"
++
++sed -e "s/\$(EXECUTABLE_NAME)/$NAME/g" -e "s/\$(PRODUCT_BUNDLE_IDENTIFIER)/$ID/g" \
++    -e "s/\$(PRODUCT_NAME)/$NAME/g" -e "s/\$(MODULE_VERSION)/$VER/g" \
++    -e "s/\$(DEVELOPMENT_LANGUAGE)/en/g" -e "s/\$(PRODUCT_BUNDLE_PACKAGE_TYPE)/KEXT/g" \
++    "$SRC/Info.plist" > "$OUT/$NAME.kext/Contents/Info.plist"
++plutil -lint "$OUT/$NAME.kext/Contents/Info.plist" >/dev/null
++if grep -q '\$(' "$OUT/$NAME.kext/Contents/Info.plist"; then
++  echo "unexpanded Xcode variable in Info.plist:" >&2; grep '\$(' "$OUT/$NAME.kext/Contents/Info.plist" >&2; exit 1
++fi
++echo "built $OUT/$NAME.kext ($ID $VER)"
+diff --git a/Tools/smckeys.c b/Tools/smckeys.c
+new file mode 100644
+index 0000000..fcae3ab
+--- /dev/null
++++ b/Tools/smckeys.c
+@@ -0,0 +1,51 @@
++// smckeys: list or read AppleSMC keys (read-only). Usage: smckeys [prefix|KEY...]
++#include <IOKit/IOKitLib.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++typedef struct { uint32_t dataSize; uint32_t dataType; uint8_t dataAttributes; } KeyInfo;
++typedef struct { char major, minor, build, reserved[1]; uint16_t release; } Vers;
++typedef struct { uint16_t version, length; uint32_t cpuPLimit, gpuPLimit, memPLimit; } PLimit;
++typedef struct { uint32_t key; Vers vers; PLimit pLimitData; KeyInfo keyInfo; uint8_t result, status, data8; uint32_t data32; uint8_t bytes[32]; } SMCParam;
++static io_connect_t conn;
++static uint32_t k2u(const char *s) { return (uint32_t)s[0]<<24 | (uint32_t)s[1]<<16 | (uint32_t)s[2]<<8 | (uint32_t)s[3]; }
++static void u2k(uint32_t u, char *s) { s[0]=u>>24; s[1]=u>>16; s[2]=u>>8; s[3]=u; s[4]=0; }
++static kern_return_t call(SMCParam *in, SMCParam *out) { size_t o = sizeof(*out); return IOConnectCallStructMethod(conn, 2, in, sizeof(*in), out, &o); }
++static int readKey(uint32_t key, KeyInfo *ki, uint8_t *bytes) {
++    SMCParam in = {0}, out = {0}; in.key = key; in.data8 = 9;
++    if (call(&in, &out) || out.result) return -1; *ki = out.keyInfo;
++    memset(&in, 0, sizeof in); in.key = key; in.keyInfo.dataSize = ki->dataSize; in.data8 = 5;
++    if (call(&in, &out) || out.result) return -2; memcpy(bytes, out.bytes, 32); return 0;
++}
++static void show(uint32_t key) {
++    KeyInfo ki; uint8_t b[32]; char k[5], t[5]; u2k(key, k);
++    int r = readKey(key, &ki, b); u2k(ki.dataType, t);
++    if (r) { printf("%s  (read error %d)\n", k, r); return; }
++    printf("%s  [%s] %2u  ", k, t, ki.dataSize);
++    for (uint32_t i = 0; i < ki.dataSize && i < 32; i++) printf("%02x", b[i]);
++    if (!strcmp(t, "sp78") && ki.dataSize == 2) printf("  = %.2f", (int16_t)(b[0]<<8|b[1]) / 256.0);
++    else if (!strcmp(t, "fpe2") && ki.dataSize == 2) printf("  = %.2f", (uint16_t)(b[0]<<8|b[1]) / 4.0);
++    else if (!strcmp(t, "flt ") && ki.dataSize == 4) { float f; memcpy(&f, b, 4); printf("  = %.2f", f); }
++    else if (!strcmp(t, "ui8 ")) printf("  = %u", b[0]);
++    else if (!strcmp(t, "ui16")) printf("  = %u", b[0]<<8|b[1]);
++    else if (!strcmp(t, "ui32")) printf("  = %u", (uint32_t)b[0]<<24|b[1]<<16|b[2]<<8|b[3]);
++    printf("\n");
++}
++int main(int argc, char **argv) {
++    io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"));
++    if (!s || IOServiceOpen(s, mach_task_self(), 0, &conn)) { fprintf(stderr, "cannot open AppleSMC\n"); return 1; }
++    if (argc > 1 && strlen(argv[1]) == 4 && argc >= 2 && argv[1][0] != '-') {
++        for (int i = 1; i < argc; i++) show(k2u(argv[i])); return 0;
++    }
++    const char *prefix = argc > 1 ? argv[1] + (argv[1][0] == '-') : "";
++    KeyInfo ki; uint8_t b[32];
++    if (readKey(k2u("#KEY"), &ki, b)) { fprintf(stderr, "#KEY failed\n"); return 1; }
++    uint32_t n = (uint32_t)b[0]<<24|b[1]<<16|b[2]<<8|b[3];
++    for (uint32_t i = 0; i < n; i++) {
++        SMCParam in = {0}, out = {0}; in.data8 = 8; in.data32 = i;
++        if (call(&in, &out) || out.result) continue;
++        char k[5]; u2k(out.key, k);
++        if (!strncmp(k, prefix, strlen(prefix))) show(out.key);
++    }
++    return 0;
++}
+diff --git a/Tools/yogactl.c b/Tools/yogactl.c
+new file mode 100644
+index 0000000..b837fab
+--- /dev/null
++++ b/Tools/yogactl.c
+@@ -0,0 +1,200 @@
++// yogactl - talk to YogaSMC (Legion build) from the shell, no root needed.
++//
++//   yogactl props [class]                      print properties (default IdeaWMIGameZone)
++//   yogactl set <class> <key> <value>          value: true/false, number (dec or 0x), or string
++//   yogactl mode [quiet|balanced|performance|custom]   show or set the Fn+Q power mode
++//   yogactl sensors                            read fan/temperature sensors once
++//   yogactl probe                              run every read-only Game Zone / capability getter
++//   yogactl query <gamezone|other|lighting|fan> <method> [arg|none]   read-only WMI method call
++//   yogactl block <guid> [instance]            read a WMI data block
++//   yogactl acpi <TABLE> [instance] <out.aml>  dump an ACPI table (DSDT, SSDT, ...)
++//
++// Build: clang -O2 -framework IOKit -framework CoreFoundation -o yogactl yogactl.c
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/IOKitLib.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <strings.h>
++
++static io_service_t find(const char *cls) {
++    io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(cls));
++    if (!s) { fprintf(stderr, "%s not found (is the YogaSMC Legion build loaded?)\n", cls); exit(1); }
++    return s;
++}
++
++static void print(CFTypeRef v, int indent);
++
++static void printDictEntry(const void *k, const void *v, void *ctx) {
++    int indent = *(int *)ctx;
++    char key[256] = "";
++    CFStringGetCString((CFStringRef)k, key, sizeof(key), kCFStringEncodingUTF8);
++    printf("%*s%s = ", indent, "", key);
++    print(v, indent);
++}
++
++static int cmpKeys(const void *a, const void *b) {
++    return CFStringCompare(*(CFStringRef *)a, *(CFStringRef *)b, 0);
++}
++
++static void print(CFTypeRef v, int indent) {
++    CFTypeID t = CFGetTypeID(v);
++    if (t == CFDictionaryGetTypeID()) {
++        CFIndex n = CFDictionaryGetCount(v);
++        const void **keys = malloc(sizeof(void *) * (n ? n : 1)), **vals = malloc(sizeof(void *) * (n ? n : 1));
++        CFDictionaryGetKeysAndValues(v, keys, vals);
++        qsort(keys, n, sizeof(void *), cmpKeys);
++        printf("{\n");
++        int in = indent + 2;
++        for (CFIndex i = 0; i < n; i++) printDictEntry(keys[i], CFDictionaryGetValue(v, keys[i]), &in);
++        printf("%*s}\n", indent, "");
++        free(keys); free(vals);
++    } else if (t == CFArrayGetTypeID()) {
++        printf("(");
++        for (CFIndex i = 0; i < CFArrayGetCount(v); i++) {
++            if (i) printf(", ");
++            CFTypeRef e = CFArrayGetValueAtIndex(v, i);
++            if (CFGetTypeID(e) == CFNumberGetTypeID()) { long long x; CFNumberGetValue(e, kCFNumberLongLongType, &x); printf("%lld", x); }
++            else print(e, indent);
++        }
++        printf(")\n");
++    } else if (t == CFNumberGetTypeID()) {
++        long long x; CFNumberGetValue(v, kCFNumberLongLongType, &x);
++        printf("%lld (0x%llx)\n", x, x);
++    } else if (t == CFBooleanGetTypeID()) {
++        printf("%s\n", CFBooleanGetValue(v) ? "Yes" : "No");
++    } else if (t == CFStringGetTypeID()) {
++        char s[1024] = ""; CFStringGetCString(v, s, sizeof(s), kCFStringEncodingUTF8); printf("\"%s\"\n", s);
++    } else if (t == CFDataGetTypeID()) {
++        CFIndex len = CFDataGetLength(v); const UInt8 *p = CFDataGetBytePtr(v);
++        printf("<%ld bytes:", (long)len);
++        for (CFIndex i = 0; i < len && i < 64; i++) printf(" %02x", p[i]);
++        printf("%s>\n", len > 64 ? " ..." : "");
++    } else {
++        CFShow(v);
++    }
++}
++
++static CFTypeRef parseValue(const char *s) {
++    if (!strcasecmp(s, "true") || !strcasecmp(s, "yes")) return CFRetain(kCFBooleanTrue);
++    if (!strcasecmp(s, "false") || !strcasecmp(s, "no")) return CFRetain(kCFBooleanFalse);
++    char *end; long long n = strtoll(s, &end, 0);
++    if (*s && !*end) return CFNumberCreate(NULL, kCFNumberLongLongType, &n);
++    return CFStringCreateWithCString(NULL, s, kCFStringEncodingUTF8);
++}
++
++static void setProp(io_service_t s, const char *key, CFTypeRef value) {
++    CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
++    kern_return_t kr = IORegistryEntrySetCFProperty(s, k, value);
++    CFRelease(k);
++    if (kr) { fprintf(stderr, "set %s failed: 0x%x\n", key, kr); exit(1); }
++}
++
++static CFTypeRef getProp(io_service_t s, const char *key) {
++    CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
++    CFTypeRef v = IORegistryEntryCreateCFProperty(s, k, NULL, 0);
++    CFRelease(k);
++    return v;
++}
++
++static void showProp(io_service_t s, const char *key) {
++    CFTypeRef v = getProp(s, key);
++    printf("%s = ", key);
++    if (v) { print(v, 0); CFRelease(v); } else printf("(none)\n");
++}
++
++static CFDictionaryRef dict2(const char *k1, CFTypeRef v1, const char *k2, CFTypeRef v2, const char *k3, CFTypeRef v3) {
++    CFMutableDictionaryRef d = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++    const char *ks[] = {k1, k2, k3}; CFTypeRef vs[] = {v1, v2, v3};
++    for (int i = 0; i < 3; i++) {
++        if (!ks[i] || !vs[i]) continue;
++        CFStringRef k = CFStringCreateWithCString(NULL, ks[i], kCFStringEncodingUTF8);
++        CFDictionarySetValue(d, k, vs[i]); CFRelease(k);
++    }
++    return d;
++}
++
++static void usage(void) {
++    fprintf(stderr, "usage: yogactl props [class] | set <class> <key> <value> | mode [name] | sensors | probe\n"
++                    "       yogactl query <gamezone|other|lighting|fan> <method> [arg|none] | block <guid> [instance]\n"
++                    "       yogactl acpi <TABLE> [instance] <out.aml>\n");
++    exit(2);
++}
++
++int main(int argc, char **argv) {
++    if (argc < 2) usage();
++    const char *cmd = argv[1];
++
++    if (!strcmp(cmd, "props")) {
++        io_service_t s = find(argc > 2 ? argv[2] : "IdeaWMIGameZone");
++        CFMutableDictionaryRef p = NULL;
++        IORegistryEntryCreateCFProperties(s, &p, NULL, 0);
++        if (p) { CFDictionaryRemoveValue(p, CFSTR("ACPITable")); print(p, 0); CFRelease(p); }
++    } else if (!strcmp(cmd, "set") && argc == 5) {
++        io_service_t s = find(argv[2]);
++        CFTypeRef v = parseValue(argv[4]);
++        setProp(s, argv[3], v); CFRelease(v);
++        printf("ok\n");
++    } else if (!strcmp(cmd, "mode")) {
++        io_service_t s = find("IdeaWMIGameZone");
++        if (argc > 2) {
++            const char *names[] = {"quiet", "balanced", "performance", "custom"}; int vals[] = {1, 2, 3, 255};
++            CFTypeRef v = NULL;
++            for (int i = 0; i < 4; i++) if (!strcasecmp(argv[2], names[i])) v = CFNumberCreate(NULL, kCFNumberIntType, &vals[i]);
++            if (!v) v = parseValue(argv[2]);
++            setProp(s, "PowerMode", v); CFRelease(v);
++            showProp(s, "PowerModeSetResult");
++        }
++        setProp(s, "Update", kCFBooleanTrue);
++        showProp(s, "PowerMode"); showProp(s, "PowerModeName"); showProp(s, "ThermalMode");
++    } else if (!strcmp(cmd, "sensors")) {
++        io_service_t s = find("IdeaWMIGameZone");
++        setProp(s, "UpdateSensors", kCFBooleanTrue);
++        showProp(s, "Legion Sensors"); showProp(s, "Legion Sensor Source");
++    } else if (!strcmp(cmd, "probe")) {
++        io_service_t s = find("IdeaWMIGameZone");
++        setProp(s, "ProbeAll", kCFBooleanTrue);
++        showProp(s, "Legion Probe");
++    } else if (!strcmp(cmd, "query") && argc >= 4) {
++        io_service_t s = find("IdeaWMIGameZone");
++        CFStringRef guid = CFStringCreateWithCString(NULL, argv[2], kCFStringEncodingUTF8);
++        CFTypeRef method = parseValue(argv[3]);
++        CFTypeRef arg = NULL, noArg = NULL;
++        if (argc > 4) {
++            if (!strcmp(argv[4], "none")) noArg = kCFBooleanTrue;
++            else if (!strncmp(argv[4], "hex:", 4)) {
++                const char *h = argv[4] + 4; size_t n = strlen(h) / 2; UInt8 *b = malloc(n ? n : 1);
++                for (size_t i = 0; i < n; i++) sscanf(h + 2 * i, "%2hhx", &b[i]);
++                arg = CFDataCreate(NULL, b, n); free(b);
++            } else arg = parseValue(argv[4]);
++        }
++        CFDictionaryRef req = dict2("GUID", guid, "Method", method, arg ? "Arg" : "NoArg", arg ? arg : noArg);
++        setProp(s, "WMIQuery", req);
++        showProp(s, "WMIQueryResult");
++    } else if (!strcmp(cmd, "block") && argc >= 3) {
++        io_service_t s = find("IdeaWMIGameZone");
++        CFStringRef guid = CFStringCreateWithCString(NULL, argv[2], kCFStringEncodingUTF8);
++        CFTypeRef inst = parseValue(argc > 3 ? argv[3] : "0");
++        CFDictionaryRef req = dict2("GUID", guid, "Instance", inst, NULL, NULL);
++        setProp(s, "WMIBlock", req);
++        showProp(s, "WMIBlockResult");
++    } else if (!strcmp(cmd, "acpi") && argc >= 4) {
++        io_service_t s = find("IdeaWMIGameZone");
++        const char *out = argv[argc - 1];
++        CFStringRef table = CFStringCreateWithCString(NULL, argv[2], kCFStringEncodingUTF8);
++        CFTypeRef inst = parseValue(argc > 4 ? argv[3] : "0");
++        CFDictionaryRef req = dict2("Table", table, "Instance", inst, NULL, NULL);
++        setProp(s, "DumpACPI", req);
++        showProp(s, "ACPITableName");
++        CFTypeRef data = getProp(s, "ACPITable");
++        if (!data || CFGetTypeID(data) != CFDataGetTypeID()) { fprintf(stderr, "no table data\n"); return 1; }
++        FILE *f = fopen(out, "wb");
++        if (!f) { perror(out); return 1; }
++        fwrite(CFDataGetBytePtr(data), 1, CFDataGetLength(data), f); fclose(f);
++        printf("wrote %ld bytes to %s\n", (long)CFDataGetLength(data), out);
++        setProp(s, "DumpACPI", CFSTR("clear"));
++    } else {
++        usage();
++    }
++    return 0;
++}
+diff --git a/YogaSMC/KeyImplementations.hpp b/YogaSMC/KeyImplementations.hpp
+index 8cc9be4..4ff80ab 100644
+--- a/YogaSMC/KeyImplementations.hpp
++++ b/YogaSMC/KeyImplementations.hpp
+@@ -44,6 +44,7 @@ static constexpr SMC_KEY KeyTCHP = SMC_MAKE_IDENTIFIER('T','C','H','P');
+ static constexpr SMC_KEY KeyTCSA = SMC_MAKE_IDENTIFIER('T','C','S','A');
+ static constexpr SMC_KEY KeyTCXC = SMC_MAKE_IDENTIFIER('T','C','X','C');
+ static constexpr SMC_KEY KeyTG0P(size_t i) { return SMC_MAKE_IDENTIFIER('T','G',KeyIndexes[i],'P');};
++static constexpr SMC_KEY KeyTG0D = SMC_MAKE_IDENTIFIER('T','G','0','D');
+ static constexpr SMC_KEY KeyTH0P(size_t i) { return SMC_MAKE_IDENTIFIER('T','H',KeyIndexes[i],'P');};
+ static constexpr SMC_KEY KeyTH0a = SMC_MAKE_IDENTIFIER('T','H','0','a');
+ static constexpr SMC_KEY KeyTH0b = SMC_MAKE_IDENTIFIER('T','H','0','b');
+diff --git a/YogaSMC/YogaSMC/IdeaSMC.cpp b/YogaSMC/YogaSMC/IdeaSMC.cpp
+index 8f01610..714043a 100644
+--- a/YogaSMC/YogaSMC/IdeaSMC.cpp
++++ b/YogaSMC/YogaSMC/IdeaSMC.cpp
+@@ -20,47 +20,63 @@ void IdeaSMC::addVSMCKey() {
+         return;
+     }
+ 
+-    UInt32 value;
+-    if (wmig->getGamzeZoneData(GAME_ZONE_WMI_GET_FAN_NUM, &value) && value) {
+-        VirtualSMCAPI::addKey(KeyF0Ac(0), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(0, SmcKeyTypeFpe2, new atomicFpKey(&currentSensor[sensorCount])));
+-        sensorIndex[sensorCount++] = GAME_ZONE_WMI_GET_FAN_ONE;
+-
+-        if (value > 1) {
+-            VirtualSMCAPI::addKey(KeyF0Ac(1), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(0, SmcKeyTypeFpe2, new atomicFpKey(&currentSensor[sensorCount])));
+-            sensorIndex[sensorCount++] = GAME_ZONE_WMI_GET_FAN_TWO;
+-        }
++    // Legion: sensors from LENOVO_OTHER_METHOD / LENOVO_GAMEZONE_DATA, see IdeaWMIGameZone::probeSensors
++    wmig->probeSensors();
+ 
+-        VirtualSMCAPI::addKey(KeyFNum, vsmcPlugin.data, VirtualSMCAPI::valueWithUint8(sensorCount, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
+-
+-        if (wmig->getGamzeZoneData(GAME_ZONE_WMI_GET_FAN_MAX, &value)) {
+-            VirtualSMCAPI::addKey(KeyF0Mx(0), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(value, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_WRITE | SMC_KEY_ATTRIBUTE_READ));
+-            if (sensorCount == 2)
+-                VirtualSMCAPI::addKey(KeyF0Mx(1), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(value, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_WRITE | SMC_KEY_ATTRIBUTE_READ));
+-        }
+-    }
+-
+-    if (wmig->getGamzeZoneData(GAME_ZONE_WMI_GET_TMP_IR, &value) && value) {
+-        VirtualSMCAPI::addKey(KeyTPCD, vsmcPlugin.data, VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new atomicSpKey(&currentSensor[sensorCount])));
+-        sensorIndex[sensorCount++] = GAME_ZONE_WMI_GET_TMP_IR;
++    UInt32 value;
++    UInt8 fans = 0;
++    static const UInt32 fanSensors[] = {LEGION_SENSOR_CPU_FAN, LEGION_SENSOR_GPU_FAN};
++    for (UInt32 sensor : fanSensors) {
++        if (sensorCount >= MAX_SENSOR || !wmig->readSensor(sensor, &value))
++            continue;
++        atomic_init(&currentSensor[sensorCount], value);
++        VirtualSMCAPI::addKey(KeyF0Ac(fans), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(0, SmcKeyTypeFpe2, new atomicFpKey(&currentSensor[sensorCount])));
++        sensorIndex[sensorCount++] = (UInt8)sensor;
++        fans++;
+     }
+ 
+-    if (wmig->getGamzeZoneData(GAME_ZONE_WMI_GET_TMP_CPU, &value) && value) {
+-        VirtualSMCAPI::addKey(KeyTCXC, vsmcPlugin.data, VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new atomicSpKey(&currentSensor[sensorCount])));
+-        sensorIndex[sensorCount++] = GAME_ZONE_WMI_GET_TMP_CPU;
++    if (fans) {
++        VirtualSMCAPI::addKey(KeyFNum, vsmcPlugin.data, VirtualSMCAPI::valueWithUint8(fans, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
++        if (wmig->gameZoneCall(GAME_ZONE_WMI_GET_FAN_MAX, &value) == kIOReturnSuccess && value > 0 && value < 20000)
++            for (UInt8 i = 0; i < fans; i++)
++                VirtualSMCAPI::addKey(KeyF0Mx(i), vsmcPlugin.data, VirtualSMCAPI::valueWithFp(value, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_READ));
+     }
+ 
+-    if (wmig->getGamzeZoneData(GAME_ZONE_WMI_GET_TMP_GPU, &value) && value) {
+-        VirtualSMCAPI::addKey(KeyTCGC, vsmcPlugin.data, VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new atomicSpKey(&currentSensor[sensorCount])));
+-        sensorIndex[sensorCount++] = GAME_ZONE_WMI_GET_TMP_GPU;
++    static const struct {
++        UInt32 sensor;
++        SMC_KEY key;
++    } tempKeys[] = {
++        {LEGION_SENSOR_CPU_TEMP, KeyTCXC},
++        {LEGION_SENSOR_GPU_TEMP, KeyTG0P(0)},
++        {LEGION_SENSOR_GPU_TEMP, KeyTG0D},
++        {LEGION_SENSOR_PCH_TEMP, KeyTPCD},
++    };
++    for (auto &t : tempKeys) {
++        if (!wmig->readSensor(t.sensor, &value))
++            continue;
++        // a second key for the same sensor shares its slot
++        UInt8 slot = sensorCount;
++        for (UInt8 i = 0; i < sensorCount; i++)
++            if (sensorIndex[i] == t.sensor)
++                slot = i;
++        if (slot == sensorCount) {
++            if (sensorCount >= MAX_SENSOR)
++                continue;
++            atomic_init(&currentSensor[sensorCount], value);
++            sensorIndex[sensorCount++] = (UInt8)t.sensor;
++        }
++        VirtualSMCAPI::addKey(t.key, vsmcPlugin.data, VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new atomicSpKey(&currentSensor[slot])));
+     }
+ 
++    // WMI sensors occupy [0, ECSensorBase), polled by updateECVendor even without EC sensors
++    ECSensorBase = sensorCount;
+     super::addVSMCKey();
+ }
+ 
+ void IdeaSMC::updateECVendor() {
+     UInt32 value;
+     for (UInt8 index = 0; index < ECSensorBase; ++index)
+-        if (wmig->getGamzeZoneData(sensorIndex[index], &value))
++        if (wmig->readSensor(sensorIndex[index], &value))
+             atomic_store_explicit(&currentSensor[index], value, memory_order_release);
+ }
+ 
+diff --git a/YogaSMC/YogaVPC/IdeaVPC.cpp b/YogaSMC/YogaVPC/IdeaVPC.cpp
+index a4fa7ae..6e39f55 100644
+--- a/YogaSMC/YogaVPC/IdeaVPC.cpp
++++ b/YogaSMC/YogaVPC/IdeaVPC.cpp
+@@ -8,7 +8,7 @@
+ //
+ 
+ #include "IdeaVPC.hpp"
+-#include "YogaWMI.hpp"
++#include "IdeaWMI.hpp"
+ OSDefineMetaClassAndStructors(IdeaVPC, YogaVPC);
+ 
+ void IdeaVPC::updateAll() {
+@@ -140,6 +140,15 @@ IOReturn IdeaVPC::message(UInt32 type, IOService *provider, void *argument) {
+             setFnLock(!FnlockMode);
+             break;
+ 
++        case kSMC_LegionEvent:
++            if (argument) {
++                LegionEventMessage *msg = reinterpret_cast<LegionEventMessage *>(argument);
++                DebugLog("message: %s Legion event 0x%x data 0x%x", provider->getName(), msg->event, msg->data);
++                if (client)
++                    client->sendNotification(msg->event, msg->data);
++            }
++            break;
++
+         case kSMC_getConservation:
+             *(reinterpret_cast<bool *>(argument)) = conservationMode;
+ //            conservationModeLock = false;
+diff --git a/YogaSMC/YogaWMI/IdeaWMI.cpp b/YogaSMC/YogaWMI/IdeaWMI.cpp
+index d71ae71..7c5762e 100644
+--- a/YogaSMC/YogaWMI/IdeaWMI.cpp
++++ b/YogaSMC/YogaWMI/IdeaWMI.cpp
+@@ -304,20 +304,123 @@ bool IdeaWMIBattery::getBatteryInfo(UInt32 index, OSArray *bat) {
+ 
+ OSDefineMetaClassAndStructors(IdeaWMIGameZone, YogaWMI);
+ 
+-bool IdeaWMIGameZone::getGamzeZoneData(UInt32 query, UInt32 *result) {
+-    IOReturn ret;
+-    OSNumber *in;
++// Read-only LENOVO_GAMEZONE_DATA methods (Get*/Is*), from the BMOF; used by WMIQuery and ProbeAll
++static const struct {
++    UInt8 id;
++    const char *name;
++} gameZoneReadMethods[] = {
++    {0x01, "GetIRTemp"},              {0x02, "GetThermalTableID"},     {0x04, "IsSupportGpuOC"},
++    {0x05, "GetGpuGpsState"},         {0x07, "GetFanCount"},           {0x08, "GetFan1Speed"},
++    {0x09, "GetFan2Speed"},           {0x0A, "GetFanMaxSpeed"},        {0x0B, "GetVersion"},
++    {0x0C, "IsSupportFanCooling"},    {0x0E, "IsSupportCpuOC"},        {0x0F, "IsBIOSSupportOC"},
++    {0x11, "GetTriggerTemperature"},  {0x12, "GetCPUTemp"},            {0x13, "GetGPUTemp"},
++    {0x14, "GetFanCoolingStatus"},    {0x15, "IsSupportDisableWinKey"},{0x17, "GetWinKeyStatus"},
++    {0x18, "IsSupportDisableTP"},     {0x1A, "GetTPStatus"},           {0x1B, "GetGPUPow"},
++    {0x1C, "GetGPUOCPow"},            {0x1D, "GetGPUOCType"},          {0x1E, "GetKeyboardfeaturelist"},
++    {0x1F, "GetMemoryOCInfo"},        {0x20, "IsSupportWaterCooling"}, {0x22, "GetWaterCoolingStatus"},
++    {0x23, "IsSupportLightingFeature"},{0x25, "GetKeyboardLight"},     {0x26, "GetMacrokeyScancode"},
++    {0x27, "GetMacrokeyCount"},       {0x28, "IsSupportGSync"},        {0x29, "GetGSyncStatus"},
++    {0x2B, "IsSupportSmartFan"},      {0x2D, "GetSmartFanMode"},       {0x2E, "GetSmartFanSetting"},
++    {0x2F, "GetPowerChargeMode"},     {0x30, "GetProductInfo"},        {0x31, "IsSupportOD"},
++    {0x32, "GetODStatus"},            {0x36, "IsRestoreOCValue"},      {0x37, "GetThermalMode"},
++    {0x38, "GetBIOSOCMode"},          {0x3A, "GetIntelligentSubMode"}, {0x3B, "GetHardwareInfoSupportVersion"},
++    {0x3C, "GetCpuFrequency"},        {0x3D, "GetLearningProfileCount"},{0x3E, "IsACFitForOC"},
++    {0x3F, "IsSupportIGPUMode"},      {0x40, "GetIGPUModeStatus"},     {0x43, "IsChangedYLog"},
++    {0x44, "GetDGPUHWId"},
++};
++
++// LENOVO_OTHER_METHOD capability IDs probed by ProbeAll (LenovoLegionToolkit CapabilityID)
++static const struct {
++    UInt32 id;
++    const char *name;
++} otherCapabilities[] = {
++    {0x00010000, "IGPUMode"},                 {0x00030000, "FlipToStart"},
++    {0x00040000, "NvidiaGPUDynamicDisplaySwitching"},
++    {0x00070000, "SupportedPowerModes"},      {0x00090000, "LegionZoneSupportVersion"},
++    {0x000A0000, "AutoSwitchRefreshRate"},    {0x000E0000, "AIChip"},
++    {0x000F0000, "IGPUModeChangeStatus"},     {0x00100000, "GodModeFnQSwitchable"},
++    {0x001A0000, "OverDrive"},                {0x0101FF00, "CPUShortTermPowerLimit"},
++    {0x0102FF00, "CPULongTermPowerLimit"},    {0x0103FF00, "CPUPeakPowerLimit"},
++    {0x0104FF00, "CPUTemperatureLimit"},      {0x0106FF00, "CPUCrossLoadingPowerLimit"},
++    {0x0107FF00, "CPUPL2Tau"},                {0x0201FF00, "GPUPowerBoost"},
++    {0x0202FF00, "GPUConfigurableTGP"},       {0x0203FF00, "GPUTemperatureLimit"},
++    {0x0204FF00, "GPUTotalProcessingPowerTargetOnAcOffsetFromBaseline"},
++    {0x020BFF00, "GPUToCPUDynamicBoost"},     {0x02070000, "GPUStatus"},
++    {0x02090000, "GPUDidVid"},                {0x03010001, "InstantBootAc"},
++    {0x03010002, "InstantBootUsbPowerDelivery"},
++    {0x04020000, "FanFullSpeed"},             {0x04030001, "CpuCurrentFanSpeed"},
++    {0x04030002, "GpuCurrentFanSpeed"},       {0x04030004, "PchCurrentFanSpeed"},
++    {0x05010000, "PchCurrentTemperature"},    {0x05040000, "CpuCurrentTemperature"},
++    {0x05050000, "GpuCurrentTemperature"},
++};
++
++static const char *legionSensorName[LEGION_SENSOR_COUNT] = {
++    "CPU Fan", "GPU Fan", "CPU Temperature", "GPU Temperature", "PCH Temperature", "IR Temperature"
++};
++
++static const char *powerModeName(UInt32 mode) {
++    switch (mode) {
++        case LEGION_MODE_QUIET:       return "Quiet";
++        case LEGION_MODE_BALANCED:    return "Balanced";
++        case LEGION_MODE_PERFORMANCE: return "Performance";
++        case LEGION_MODE_EXTREME:     return "Extreme";
++        case LEGION_MODE_CUSTOM:      return "Custom";
++        default:                      return "Unknown";
++    }
++}
+ 
+-    in = OSNumber::withNumber(0ULL, 32);
+-    ret = YWMI->evaluateInteger(GAME_ZONE_DATA_WMI_METHOD, 0, query, result, in, true);
++static inline bool isFanSensor(UInt32 sensor) {
++    return sensor == LEGION_SENSOR_CPU_FAN || sensor == LEGION_SENSOR_GPU_FAN;
++}
++
++static inline bool plausible(UInt32 sensor, UInt32 value) {
++    return isFanSensor(sensor) ? value < 20000 : (value > 0 && value < 128);
++}
++
++IOReturn IdeaWMIGameZone::gameZoneCall(UInt32 method, UInt32 *result, OSObject *input) {
++    OSObject *in = input;
++    if (in)
++        in->retain();
++    else
++        in = OSNumber::withNumber(0ULL, 32);
++
++    UInt32 value = 0;
++    IOReturn ret = YWMI->evaluateInteger(GAME_ZONE_DATA_WMI_METHOD, 0, method, &value, in, true);
+     OSSafeReleaseNULL(in);
+ 
+-    if (ret != kIOReturnSuccess)
+-        AlwaysLog("Query %d evaluation failed", query);
++    if (ret == kIOReturnSuccess && result)
++        *result = value;
++    return ret;
++}
+ 
++bool IdeaWMIGameZone::getGamzeZoneData(UInt32 query, UInt32 *result) {
++    IOReturn ret = gameZoneCall(query, result);
++    if (ret != kIOReturnSuccess)
++        AlwaysLog("Query %d evaluation failed 0x%x", query, ret);
+     return (ret == kIOReturnSuccess);
+ }
+ 
++IOReturn IdeaWMIGameZone::getFeature(UInt32 id, UInt32 *value) {
++    if (!otherMethod)
++        return kIOReturnUnsupported;
++
++    OSNumber *in = OSNumber::withNumber(id, 32);
++    IOReturn ret = YWMI->evaluateInteger(LENOVO_OTHER_WMI_METHOD, 0, LENOVO_OTHER_GET_FEATURE, value, in, true);
++    OSSafeReleaseNULL(in);
++    return ret;
++}
++
++IOReturn IdeaWMIGameZone::setFeature(UInt32 id, UInt32 value) {
++    if (!otherMethod)
++        return kIOReturnUnsupported;
++
++    UInt32 args[2] = {id, value};
++    OSData *in = OSData::withBytes(args, sizeof(args));
++    IOReturn ret = YWMI->evaluateMethod(LENOVO_OTHER_WMI_METHOD, 0, LENOVO_OTHER_SET_FEATURE, nullptr, in, true);
++    OSSafeReleaseNULL(in);
++    return ret;
++}
++
+ void IdeaWMIGameZone::processWMI() {
+     setProperty("Feature", feature);
+ 
+@@ -337,16 +440,226 @@ void IdeaWMIGameZone::processWMI() {
+         setProperty("Keyboard Feature", result, 32);
+     else
+         AlwaysLog("Failed to get keyboard feature");
++
++    // Legion extensions, see LenovoLegionToolkit (LENOVO_GAMEZONE_DATA / LENOVO_OTHER_METHOD)
++    otherMethod = YWMI->hasMethod(LENOVO_OTHER_WMI_METHOD);
++    smartFanCap  = gameZoneCall(GAME_ZONE_WMI_CAP_SMARTFAN, &result) == kIOReturnSuccess && result;
++    touchpadCap  = gameZoneCall(GAME_ZONE_WMI_CAP_TOUCHPAD, &result) == kIOReturnSuccess && result;
++    winKeyCap    = gameZoneCall(GAME_ZONE_WMI_CAP_WIN_KEY, &result) == kIOReturnSuccess && result;
++    overDriveCap = gameZoneCall(GAME_ZONE_WMI_CAP_OVER_DRIVE, &result) == kIOReturnSuccess && result;
++    iGPUModeCap  = gameZoneCall(GAME_ZONE_WMI_CAP_IGPU_MODE, &result) == kIOReturnSuccess && result;
++
++    OSDictionary *caps = OSDictionary::withCapacity(6);
++    if (caps) {
++        caps->setObject("OtherMethod", otherMethod ? kOSBooleanTrue : kOSBooleanFalse);
++        caps->setObject("PowerMode", smartFanCap ? kOSBooleanTrue : kOSBooleanFalse);
++        caps->setObject("TouchpadLock", touchpadCap ? kOSBooleanTrue : kOSBooleanFalse);
++        caps->setObject("WinKeyLock", winKeyCap ? kOSBooleanTrue : kOSBooleanFalse);
++        caps->setObject("OverDrive", overDriveCap ? kOSBooleanTrue : kOSBooleanFalse);
++        caps->setObject("IGPUMode", iGPUModeCap ? kOSBooleanTrue : kOSBooleanFalse);
++        setProperty("Legion Capabilities", caps);
++        caps->release();
++    }
++
++    probeSensors();
++    updateLegion();
++
++    // Windows enables WMI events when a consumer (Vantage/LLT) subscribes; WExx is skipped if absent
++    const char *events[] = {GAME_ZONE_SMART_FAN_WMI_EVENT, GAME_ZONE_THERMAL_WMI_EVENT, GAME_ZONE_KEY_WMI_EVENT,
++                            GAME_ZONE_CHARGE_WMI_EVENT, GAME_ZONE_LIGHT_WMI_EVENT, GAME_ZONE_FAN_SET_WMI_EVENT};
++    for (auto guid : events)
++        if (YWMI->hasMethod(guid, ACPI_WMI_EVENT))
++            YWMI->enableEvent(guid, true);
++
++    // Make the instance visible to IOServiceGetMatchingServices for YogaSMCNC
++    registerService();
+ }
+ 
+-void IdeaWMIGameZone::ACPIEvent(UInt32 argument) {
+-    OSObject *result;
+-    OSNumber *id;
+-    if (YWMI->getEventData(argument, &result) && (id = (OSDynamicCast(OSNumber, result))))
+-        DebugLog("message: ACPI notification 0x%04x - 0x%04x", argument, id->unsigned32BitValue());
++void IdeaWMIGameZone::probeSensors() {
++    if (sensorsProbed)
++        return;
++    sensorsProbed = true;
++
++    static const struct {
++        UInt32 sensor;
++        UInt32 capability;
++        UInt32 gameZone;
++    } sources[] = {
++        {LEGION_SENSOR_CPU_FAN,  LENOVO_CAP_CPU_FAN_SPEED, GAME_ZONE_WMI_GET_FAN_ONE},
++        {LEGION_SENSOR_GPU_FAN,  LENOVO_CAP_GPU_FAN_SPEED, GAME_ZONE_WMI_GET_FAN_TWO},
++        {LEGION_SENSOR_CPU_TEMP, LENOVO_CAP_CPU_TEMP,      GAME_ZONE_WMI_GET_TMP_CPU},
++        {LEGION_SENSOR_GPU_TEMP, LENOVO_CAP_GPU_TEMP,      GAME_ZONE_WMI_GET_TMP_GPU},
++        {LEGION_SENSOR_PCH_TEMP, LENOVO_CAP_PCH_TEMP,      0},
++        {LEGION_SENSOR_IR_TEMP,  0,                        GAME_ZONE_WMI_GET_TMP_IR},
++    };
++
++    OSDictionary *status = OSDictionary::withCapacity(LEGION_SENSOR_COUNT);
++    char desc[48];
++
++    for (auto &src : sources) {
++        UInt32 otherValue = 0, gzValue = 0;
++        bool otherOk = src.capability && getFeature(src.capability, &otherValue) == kIOReturnSuccess &&
++                       plausible(src.sensor, otherValue);
++        bool gzOk = src.gameZone && gameZoneCall(src.gameZone, &gzValue) == kIOReturnSuccess &&
++                    plausible(src.sensor, gzValue);
++
++        // LLT reads Legion Gen 7+ sensors through LENOVO_OTHER_METHOD; prefer it unless it reports a
++        // stopped fan while Game Zone reports a spinning one
++        if (otherOk && !(isFanSensor(src.sensor) && otherValue == 0 && gzOk && gzValue != 0)) {
++            sensorSource[src.sensor] = src.capability;
++            sensorFromOther[src.sensor] = true;
++            snprintf(desc, sizeof(desc), "Other 0x%08x (%u)", src.capability, otherValue);
++        } else if (gzOk) {
++            sensorSource[src.sensor] = src.gameZone;
++            sensorFromOther[src.sensor] = false;
++            snprintf(desc, sizeof(desc), "GameZone %u (%u)", src.gameZone, gzValue);
++        } else {
++            snprintf(desc, sizeof(desc), "unavailable");
++        }
++
++        if (status) {
++            OSString *str = OSString::withCString(desc);
++            if (str) {
++                status->setObject(legionSensorName[src.sensor], str);
++                str->release();
++            }
++        }
++    }
++
++    if (status) {
++        setProperty("Legion Sensor Source", status);
++        status->release();
++    }
++}
++
++bool IdeaWMIGameZone::readSensor(UInt32 sensor, UInt32 *value) {
++    if (sensor >= LEGION_SENSOR_COUNT || !sensorSource[sensor])
++        return false;
++
++    UInt32 result = 0;
++    IOReturn ret = sensorFromOther[sensor] ? getFeature(sensorSource[sensor], &result)
++                                           : gameZoneCall(sensorSource[sensor], &result);
++    if (ret != kIOReturnSuccess || !plausible(sensor, result))
++        return false;
++
++    *value = result;
++    return true;
++}
++
++bool IdeaWMIGameZone::publishState(const char *key, UInt32 method, bool asBoolean) {
++    UInt32 value;
++    if (gameZoneCall(method, &value) != kIOReturnSuccess) {
++        removeProperty(key);
++        return false;
++    }
++
++    if (asBoolean)
++        setProperty(key, value != 0);
+     else
+-        AlwaysLog("message: Unknown ACPI notification 0x%04x", argument);
++        setProperty(key, value, 32);
++    return true;
++}
++
++void IdeaWMIGameZone::updatePowerMode(bool notify) {
++    UInt32 mode;
++    if (!smartFanCap || gameZoneCall(GAME_ZONE_WMI_GET_SMARTFAN_MODE, &mode) != kIOReturnSuccess)
++        return;
++
++    setProperty("PowerMode", mode, 32);
++    setProperty("PowerModeName", powerModeName(mode));
++    if (notify)
++        notifyLegion(LEGION_EVENT_POWER_MODE, mode);
++}
++
++void IdeaWMIGameZone::updateLegion() {
++    updatePowerMode(false);
++    publishState("ThermalMode", GAME_ZONE_WMI_GET_THERMAL_MODE, false);
++    publishState("PowerChargeMode", GAME_ZONE_WMI_GET_CHARGE_MODE, false);
++    if (touchpadCap)
++        publishState("TouchpadLock", GAME_ZONE_WMI_GET_TOUCHPAD, true);
++    if (winKeyCap)
++        publishState("WinKeyLock", GAME_ZONE_WMI_GET_WIN_KEY, true);
++    if (overDriveCap)
++        publishState("OverDrive", GAME_ZONE_WMI_GET_OVER_DRIVE, true);
++    if (iGPUModeCap)
++        publishState("IGPUMode", GAME_ZONE_WMI_GET_IGPU_MODE, false);
++}
++
++void IdeaWMIGameZone::notifyLegion(UInt32 event, UInt32 data) {
++    LegionEventMessage msg {event, data};
++    dispatchMessage(kSMC_LegionEvent, &msg);
++}
++
++void IdeaWMIGameZone::setPowerMode(UInt32 mode) {
++    if (!smartFanCap) {
++        AlwaysLog(notSupported, "PowerMode");
++        return;
++    }
++
++    switch (mode) {
++        case LEGION_MODE_QUIET:
++        case LEGION_MODE_BALANCED:
++        case LEGION_MODE_PERFORMANCE:
++        case LEGION_MODE_EXTREME:
++        case LEGION_MODE_CUSTOM:
++            break;
++        default:
++            AlwaysLog(valueInvalid, "PowerMode");
++            return;
++    }
++
++    OSNumber *in = OSNumber::withNumber(mode, 32);
++    IOReturn ret = YWMI->evaluateMethod(GAME_ZONE_DATA_WMI_METHOD, 0, GAME_ZONE_WMI_SET_SMARTFAN_MODE, nullptr, in, true);
++    OSSafeReleaseNULL(in);
++
++    setProperty("PowerModeSetResult", ret, 32);
++    if (ret != kIOReturnSuccess)
++        AlwaysLog(toggleError, "PowerMode", ret);
++    updatePowerMode(true);
++}
++
++void IdeaWMIGameZone::setToggle(const char *key, UInt32 setMethod, UInt32 getMethod, bool enable) {
++    OSNumber *in = OSNumber::withNumber(enable ? 1 : 0, 32);
++    IOReturn ret = YWMI->evaluateMethod(GAME_ZONE_DATA_WMI_METHOD, 0, setMethod, nullptr, in, true);
++    OSSafeReleaseNULL(in);
++
++    if (ret != kIOReturnSuccess)
++        AlwaysLog(toggleError, key, ret);
++    publishState(key, getMethod, true);
++}
++
++void IdeaWMIGameZone::ACPIEvent(UInt32 argument) {
++    OSObject *result = nullptr;
++    UInt32 data = 0;
++    if (YWMI->getEventData(argument, &result)) {
++        if (OSNumber *num = OSDynamicCast(OSNumber, result))
++            data = num->unsigned32BitValue();
++        else if (OSData *buf = OSDynamicCast(OSData, result))
++            if (buf->getLength() >= sizeof(data))
++                memcpy(&data, buf->getBytesNoCopy(), sizeof(data));
++    }
+     OSSafeReleaseNULL(result);
++
++    UInt32 last[2] = {argument, data};
++    setProperty("LastEvent", last, sizeof(last));
++    DebugLog("message: ACPI notification 0x%04x - 0x%04x", argument, data);
++
++    if (smartFanEvent && argument == smartFanEvent) {
++        updatePowerMode(true);
++    } else if (thermalEvent && argument == thermalEvent) {
++        publishState("ThermalMode", GAME_ZONE_WMI_GET_THERMAL_MODE, false);
++        notifyLegion(LEGION_EVENT_THERMAL_MODE, data);
++    } else if (argument == keyEvent) {
++        updateLegion();
++        notifyLegion(LEGION_EVENT_KEY_LOCK, data);
++    } else if (chargeEvent && argument == chargeEvent) {
++        publishState("PowerChargeMode", GAME_ZONE_WMI_GET_CHARGE_MODE, false);
++        notifyLegion(LEGION_EVENT_CHARGE_MODE, data);
++    } else if (lightEvent && argument == lightEvent) {
++        notifyLegion(LEGION_EVENT_LIGHT, data);
++    } else if (fanSettingEvent && argument == fanSettingEvent) {
++        notifyLegion(LEGION_EVENT_FAN_SETTING, data);
++    }
+ }
+ 
+ const char* IdeaWMIGameZone::registerEvent(OSString *guid, UInt32 id) {
+@@ -360,7 +673,302 @@ const char* IdeaWMIGameZone::registerEvent(OSString *guid, UInt32 id) {
+         fanEvent = id;
+     else if (guid->isEqualTo(GAME_ZONE_KEY_WMI_EVENT))
+         keyEvent = id;
++    else if (guid->isEqualTo(GAME_ZONE_SMART_FAN_WMI_EVENT))
++        smartFanEvent = id;
++    else if (guid->isEqualTo(GAME_ZONE_FAN_SET_WMI_EVENT))
++        fanSettingEvent = id;
++    else if (guid->isEqualTo(GAME_ZONE_CHARGE_WMI_EVENT))
++        chargeEvent = id;
++    else if (guid->isEqualTo(GAME_ZONE_LIGHT_WMI_EVENT))
++        lightEvent = id;
++    else if (guid->isEqualTo(GAME_ZONE_THERMAL_WMI_EVENT))
++        thermalEvent = id;
+     else
+         return nullptr;
+     return feature;
+ }
++
++IOReturn IdeaWMIGameZone::setProperties(OSObject *props) {
++    commandGate->runAction(OSMemberFunctionCast(IOCommandGate::Action, this, &IdeaWMIGameZone::setPropertiesGated), props);
++    return kIOReturnSuccess;
++}
++
++void IdeaWMIGameZone::setPropertiesGated(OSObject *props) {
++    OSDictionary *dict = OSDynamicCast(OSDictionary, props);
++    if (!dict)
++        return;
++
++    OSCollectionIterator *i = OSCollectionIterator::withCollection(dict);
++    if (!i)
++        return;
++
++    while (OSString *key = OSDynamicCast(OSString, i->getNextObject())) {
++        OSObject *obj = dict->getObject(key);
++        if (key->isEqualTo("PowerMode")) {
++            if (OSNumber *num = OSDynamicCast(OSNumber, obj)) {
++                setPowerMode(num->unsigned32BitValue());
++            } else if (OSString *str = OSDynamicCast(OSString, obj)) {
++                static const UInt32 modes[] = {LEGION_MODE_QUIET, LEGION_MODE_BALANCED, LEGION_MODE_PERFORMANCE,
++                                               LEGION_MODE_EXTREME, LEGION_MODE_CUSTOM};
++                for (UInt32 mode : modes)
++                    if (str->isEqualTo(powerModeName(mode)))
++                        setPowerMode(mode);
++            } else {
++                AlwaysLog(valueInvalid, "PowerMode");
++            }
++        } else if (key->isEqualTo("TouchpadLock") || key->isEqualTo("WinKeyLock") || key->isEqualTo("OverDrive")) {
++            OSBoolean *value = OSDynamicCast(OSBoolean, obj);
++            if (!value) {
++                AlwaysLog(valueInvalid, key->getCStringNoCopy());
++            } else if (key->isEqualTo("TouchpadLock") && touchpadCap) {
++                setToggle("TouchpadLock", GAME_ZONE_WMI_SET_TOUCHPAD, GAME_ZONE_WMI_GET_TOUCHPAD, value->getValue());
++            } else if (key->isEqualTo("WinKeyLock") && winKeyCap) {
++                setToggle("WinKeyLock", GAME_ZONE_WMI_SET_WIN_KEY, GAME_ZONE_WMI_GET_WIN_KEY, value->getValue());
++            } else if (key->isEqualTo("OverDrive") && overDriveCap) {
++                setToggle("OverDrive", GAME_ZONE_WMI_SET_OVER_DRIVE, GAME_ZONE_WMI_GET_OVER_DRIVE, value->getValue());
++            } else {
++                AlwaysLog(notSupported, key->getCStringNoCopy());
++            }
++        } else if (key->isEqualTo("Update")) {
++            updateLegion();
++        } else if (key->isEqualTo("UpdateSensors")) {
++            OSDictionary *values = OSDictionary::withCapacity(LEGION_SENSOR_COUNT);
++            if (values) {
++                for (UInt32 sensor = 0; sensor < LEGION_SENSOR_COUNT; sensor++) {
++                    UInt32 value;
++                    if (readSensor(sensor, &value)) {
++                        OSNumber *num = OSNumber::withNumber(value, 32);
++                        if (num) {
++                            values->setObject(legionSensorName[sensor], num);
++                            num->release();
++                        }
++                    }
++                }
++                setProperty("Legion Sensors", values);
++                values->release();
++            }
++        } else if (key->isEqualTo("WMIQuery")) {
++            if (OSDictionary *req = OSDynamicCast(OSDictionary, obj))
++                wmiQuery(req);
++        } else if (key->isEqualTo("WMIBlock")) {
++            if (OSDictionary *req = OSDynamicCast(OSDictionary, obj))
++                wmiBlock(req);
++        } else if (key->isEqualTo("ProbeAll")) {
++            OSDictionary *probe = OSDictionary::withCapacity(96);
++            if (!probe)
++                continue;
++            char name[64];
++            for (auto &m : gameZoneReadMethods) {
++                UInt32 value = 0;
++                IOReturn ret = gameZoneCall(m.id, &value);
++                snprintf(name, sizeof(name), "GZ %02u %s", m.id, m.name);
++                OSObject *res;
++                if (ret == kIOReturnSuccess) {
++                    res = OSNumber::withNumber(value, 32);
++                } else {
++                    char err[24];
++                    snprintf(err, sizeof(err), "error 0x%x", ret);
++                    res = OSString::withCString(err);
++                }
++                if (res) {
++                    probe->setObject(name, res);
++                    res->release();
++                }
++            }
++            for (auto &c : otherCapabilities) {
++                UInt32 value = 0;
++                IOReturn ret = getFeature(c.id, &value);
++                snprintf(name, sizeof(name), "OT %08x %s", c.id, c.name);
++                OSObject *res;
++                if (ret == kIOReturnSuccess) {
++                    res = OSNumber::withNumber(value, 32);
++                } else {
++                    char err[24];
++                    snprintf(err, sizeof(err), "error 0x%x", ret);
++                    res = OSString::withCString(err);
++                }
++                if (res) {
++                    probe->setObject(name, res);
++                    res->release();
++                }
++            }
++            setProperty("Legion Probe", probe);
++            probe->release();
++        } else if (key->isEqualTo("DumpACPI")) {
++            dumpACPI(obj);
++        } else {
++            AlwaysLog("Unknown property %s", key->getCStringNoCopy());
++        }
++    }
++    i->release();
++}
++
++// WMIQuery = {GUID: "gamezone"|"other"|"lighting"|"fan"|<guid>, Method: n, Arg: number|data (optional), NoArg: bool}
++void IdeaWMIGameZone::wmiQuery(OSDictionary *request) {
++    OSString *guidName = OSDynamicCast(OSString, request->getObject("GUID"));
++    OSNumber *method = OSDynamicCast(OSNumber, request->getObject("Method"));
++    OSObject *arg = request->getObject("Arg");
++    OSBoolean *noArg = OSDynamicCast(OSBoolean, request->getObject("NoArg"));
++
++    OSDictionary *res = OSDictionary::withCapacity(6);
++    if (!res)
++        return;
++
++    enum { kGameZone, kOther, kLighting, kFan, kInvalid } iface = kGameZone;
++    if (guidName) {
++        if (guidName->isEqualTo("other") || guidName->isEqualTo(LENOVO_OTHER_WMI_METHOD))
++            iface = kOther;
++        else if (guidName->isEqualTo("lighting") || guidName->isEqualTo(LENOVO_LIGHTING_WMI_METHOD))
++            iface = kLighting;
++        else if (guidName->isEqualTo("fan") || guidName->isEqualTo(LENOVO_FAN_WMI_METHOD))
++            iface = kFan;
++        else if (!guidName->isEqualTo("gamezone") && !guidName->isEqualTo(GAME_ZONE_DATA_WMI_METHOD))
++            iface = kInvalid;
++    }
++
++    // Only methods that read state are allowed here
++    bool allowed = false;
++    const char *guid = nullptr;
++    UInt32 id = method ? method->unsigned32BitValue() : 0;
++    switch (iface) {
++        case kGameZone:
++            guid = GAME_ZONE_DATA_WMI_METHOD;
++            for (auto &m : gameZoneReadMethods)
++                if (m.id == id)
++                    allowed = true;
++            break;
++        case kOther:
++            guid = LENOVO_OTHER_WMI_METHOD;
++            allowed = (id == LENOVO_OTHER_GET_FEATURE || id == LENOVO_OTHER_GET_COMMAND);
++            break;
++        case kLighting:
++            guid = LENOVO_LIGHTING_WMI_METHOD;
++            allowed = (id == 1); // Get_Lighting_Current_Status
++            break;
++        case kFan:
++            guid = LENOVO_FAN_WMI_METHOD;
++            allowed = (id == 5); // Fan_Get_Table
++            break;
++        default:
++            break;
++    }
++
++    OSString *g = OSString::withCString(guid ? guid : "invalid");
++    if (g) {
++        res->setObject("GUID", g);
++        g->release();
++    }
++    if (method)
++        res->setObject("Method", method);
++
++    if (!allowed || !method) {
++        OSString *s = OSString::withCString("not allowed (read-only methods only)");
++        if (s) {
++            res->setObject("Error", s);
++            s->release();
++        }
++    } else {
++        OSObject *input = nullptr;
++        bool owned = false;
++        if (noArg && noArg->getValue()) {
++            input = nullptr;
++        } else if (arg && (OSDynamicCast(OSNumber, arg) || OSDynamicCast(OSData, arg))) {
++            input = arg;
++        } else {
++            input = OSNumber::withNumber(0ULL, 32);
++            owned = true;
++        }
++
++        OSObject *out = nullptr;
++        IOReturn ret = YWMI->evaluateMethod(guid, 0, id, &out, input, true);
++        if (owned)
++            OSSafeReleaseNULL(input);
++
++        OSNumber *status = OSNumber::withNumber(ret, 32);
++        if (status) {
++            res->setObject("Status", status);
++            status->release();
++        }
++        if (out) {
++            const char *type = OSDynamicCast(OSNumber, out) ? "number" :
++                               OSDynamicCast(OSData, out) ? "data" :
++                               OSDynamicCast(OSString, out) ? "string" :
++                               OSDynamicCast(OSArray, out) ? "package" : "other";
++            OSString *t = OSString::withCString(type);
++            if (t) {
++                res->setObject("Type", t);
++                t->release();
++            }
++            res->setObject("Value", out);
++            out->release();
++        }
++    }
++
++    setProperty("WMIQueryResult", res);
++    res->release();
++}
++
++// WMIBlock = {GUID: <data block guid>, Instance: n}
++void IdeaWMIGameZone::wmiBlock(OSDictionary *request) {
++    OSString *guid = OSDynamicCast(OSString, request->getObject("GUID"));
++    OSNumber *instance = OSDynamicCast(OSNumber, request->getObject("Instance"));
++
++    OSDictionary *res = OSDictionary::withCapacity(4);
++    if (!res || !guid) {
++        OSSafeReleaseNULL(res);
++        return;
++    }
++    res->setObject("GUID", guid);
++    if (instance)
++        res->setObject("Instance", instance);
++
++    OSObject *out = nullptr;
++    IOReturn ret = YWMI->queryBlock(guid->getCStringNoCopy(), instance ? instance->unsigned8BitValue() : 0, &out, true);
++    OSNumber *status = OSNumber::withNumber(ret, 32);
++    if (status) {
++        res->setObject("Status", status);
++        status->release();
++    }
++    if (out) {
++        res->setObject("Value", out);
++        out->release();
++    }
++    setProperty("WMIBlockResult", res);
++    res->release();
++}
++
++// DumpACPI = "DSDT" | "SSDT" | {Table: "SSDT", Instance: n} | "clear"
++void IdeaWMIGameZone::dumpACPI(OSObject *request) {
++    char table[5] = "DSDT";
++    UInt32 instance = 0;
++
++    if (OSString *str = OSDynamicCast(OSString, request)) {
++        if (str->isEqualTo("clear")) {
++            removeProperty("ACPITable");
++            removeProperty("ACPITableName");
++            return;
++        }
++        strlcpy(table, str->getCStringNoCopy(), sizeof(table));
++    } else if (OSDictionary *dict = OSDynamicCast(OSDictionary, request)) {
++        if (OSString *name = OSDynamicCast(OSString, dict->getObject("Table")))
++            strlcpy(table, name->getCStringNoCopy(), sizeof(table));
++        if (OSNumber *num = OSDynamicCast(OSNumber, dict->getObject("Instance")))
++            instance = num->unsigned32BitValue();
++    }
++
++    char desc[32];
++    // the returned object is owned by the platform expert (see NootedRed), only copy it
++    const OSData *data = YWMI->getACPIDevice()->getACPITableData(table, instance);
++    if (!data) {
++        snprintf(desc, sizeof(desc), "%s %u not found", table, instance);
++        removeProperty("ACPITable");
++    } else {
++        OSData *copy = OSData::withData(data);
++        if (copy) {
++            setProperty("ACPITable", copy);
++            copy->release();
++        }
++        snprintf(desc, sizeof(desc), "%s %u (%u bytes)", table, instance, data->getLength());
++    }
++    setProperty("ACPITableName", desc);
++}
+diff --git a/YogaSMC/YogaWMI/IdeaWMI.hpp b/YogaSMC/YogaWMI/IdeaWMI.hpp
+index ee10fba..98275d2 100644
+--- a/YogaSMC/YogaWMI/IdeaWMI.hpp
++++ b/YogaSMC/YogaWMI/IdeaWMI.hpp
+@@ -34,6 +34,74 @@
+ #define SUPER_RES_DATA_WMI_METHOD   "77e614ed-f19e-46d6-a613-a8669fee1ff0"
+ #define SUPER_RES_WMI_EVENT         "95d1df76-d6c0-4e16-9193-7b2a849f3df2"
+ 
++// Legion (Game Zone v2+) interfaces, from the BMOF of Legion Pro 5 16IRX9 and LenovoLegionToolkit
++#define GAME_ZONE_SMART_FAN_WMI_EVENT   "d320289e-8fea-41e0-86f9-611d83151b5f"
++#define GAME_ZONE_FAN_SET_WMI_EVENT     "d320289e-8fea-41e1-86f9-611d83151b5f"
++#define GAME_ZONE_CHARGE_WMI_EVENT      "d320289e-8fea-41e0-86f9-711d83151b5f"
++#define GAME_ZONE_LIGHT_WMI_EVENT       "d320289e-8fea-41e0-86f9-811d83151b5f"
++#define GAME_ZONE_THERMAL_WMI_EVENT     "d320289e-8fea-41e0-86f9-911d83151b5f"
++#define LENOVO_OTHER_WMI_METHOD         "dc2a8805-3a8c-41ba-a6f7-092e0089cd3b"
++#define LENOVO_FAN_WMI_METHOD           "92549549-4bde-4f06-ac04-ce8bf898dbaa"
++#define LENOVO_LIGHTING_WMI_METHOD      "8c5b9127-ecd4-4657-980f-851019f99ca5"
++
++// LENOVO_OTHER_METHOD
++enum {
++    LENOVO_OTHER_GET_FEATURE  = 17, // GetFeatureValue(IDs) -> value
++    LENOVO_OTHER_SET_FEATURE  = 18, // SetFeatureValue(IDs, value)
++    LENOVO_OTHER_GET_COMMAND  = 19, // GetDataByCommand(IDs, Command) -> data[]
++};
++
++// LENOVO_OTHER_METHOD capability IDs, from LenovoLegionToolkit (CapabilityID)
++enum {
++    LENOVO_CAP_IGPU_MODE          = 0x00010000,
++    LENOVO_CAP_SUPPORTED_MODES    = 0x00070000,
++    LENOVO_CAP_LEGION_ZONE_VER    = 0x00090000,
++    LENOVO_CAP_FNQ_CUSTOM         = 0x00100000,
++    LENOVO_CAP_OVERDRIVE          = 0x001A0000,
++    LENOVO_CAP_FAN_FULL_SPEED     = 0x04020000,
++    LENOVO_CAP_CPU_FAN_SPEED      = 0x04030001,
++    LENOVO_CAP_GPU_FAN_SPEED      = 0x04030002,
++    LENOVO_CAP_PCH_FAN_SPEED      = 0x04030004,
++    LENOVO_CAP_PCH_TEMP           = 0x05010000,
++    LENOVO_CAP_CPU_TEMP           = 0x05040000,
++    LENOVO_CAP_GPU_TEMP           = 0x05050000,
++};
++
++// Smart fan (Fn+Q) modes, LenovoLegionToolkit PowerModeState + 1
++enum {
++    LEGION_MODE_QUIET       = 1,
++    LEGION_MODE_BALANCED    = 2,
++    LEGION_MODE_PERFORMANCE = 3,
++    LEGION_MODE_EXTREME     = 224,
++    LEGION_MODE_CUSTOM      = 255,
++};
++
++// Sensors read for IdeaSMC
++enum {
++    LEGION_SENSOR_CPU_FAN,
++    LEGION_SENSOR_GPU_FAN,
++    LEGION_SENSOR_CPU_TEMP,
++    LEGION_SENSOR_GPU_TEMP,
++    LEGION_SENSOR_PCH_TEMP,
++    LEGION_SENSOR_IR_TEMP,
++    LEGION_SENSOR_COUNT
++};
++
++// Notifications forwarded to YogaSMCNC through IdeaVPC (event id, data = raw value)
++enum {
++    LEGION_EVENT_POWER_MODE   = 0x20,
++    LEGION_EVENT_THERMAL_MODE = 0x21,
++    LEGION_EVENT_KEY_LOCK     = 0x22,
++    LEGION_EVENT_CHARGE_MODE  = 0x23,
++    LEGION_EVENT_LIGHT        = 0x24,
++    LEGION_EVENT_FAN_SETTING  = 0x25,
++};
++
++struct LegionEventMessage {
++    UInt32 event;
++    UInt32 data;
++};
++
+ enum {
+     GAME_ZONE_WMI_GET_TMP_IR        = 0x01,
+     GAME_ZONE_WMI_GET_THERMAL_TABLE = 0x02,
+@@ -80,15 +148,29 @@ enum {
+     GAME_ZONE_WMI_CAP_SMARTFAN      = 0x2B,
+     GAME_ZONE_WMI_SET_SMARTFAN_MODE = 0x2C,
+     GAME_ZONE_WMI_GET_SMARTFAN_MODE = 0x2D,
+-    GAME_ZONE_WMI_GET_SMARTFAN_STA  = 0x2F,
+-    GAME_ZONE_WMI_GET_CHARGE_MODE   = 0x30,
++    GAME_ZONE_WMI_GET_SMARTFAN_STA  = 0x2E,
++    GAME_ZONE_WMI_GET_CHARGE_MODE   = 0x2F,
++    GAME_ZONE_WMI_GET_PRODUCT_INFO  = 0x30,
+     GAME_ZONE_WMI_CAP_OVER_DRIVE    = 0x31,
+     GAME_ZONE_WMI_GET_OVER_DRIVE    = 0x32,
+     GAME_ZONE_WMI_SET_OVER_DRIVE    = 0x33,
+     GAME_ZONE_WMI_SET_LIGHT_CTL     = 0x34,
+     GAME_ZONE_WMI_SET_DDS_CTL       = 0x35,
+     GAME_ZONE_WMI_RET_OC_VAL        = 0x36,
+-    GAME_ZONE_WMI_GET_THERMAL_MODE  = 0x37
++    GAME_ZONE_WMI_GET_THERMAL_MODE  = 0x37,
++    GAME_ZONE_WMI_GET_BIOS_OC_MODE  = 0x38,
++    GAME_ZONE_WMI_SET_INTEL_SUBMODE = 0x39,
++    GAME_ZONE_WMI_GET_INTEL_SUBMODE = 0x3A,
++    GAME_ZONE_WMI_GET_HW_INFO_VER   = 0x3B,
++    GAME_ZONE_WMI_GET_CPU_FREQ      = 0x3C,
++    GAME_ZONE_WMI_GET_LEARN_COUNT   = 0x3D,
++    GAME_ZONE_WMI_IS_AC_FIT_FOR_OC  = 0x3E,
++    GAME_ZONE_WMI_CAP_IGPU_MODE     = 0x3F,
++    GAME_ZONE_WMI_GET_IGPU_MODE     = 0x40,
++    GAME_ZONE_WMI_SET_IGPU_MODE     = 0x41,
++    GAME_ZONE_WMI_NOTIFY_DGPU       = 0x42,
++    GAME_ZONE_WMI_IS_CHANGED_YLOG   = 0x43,
++    GAME_ZONE_WMI_GET_DGPU_HWID     = 0x44
+ };
+ 
+ enum
+@@ -207,9 +289,68 @@ class IdeaWMIGameZone : public YogaWMI
+     UInt32 GPUEvent  {0xe0};
+     UInt32 fanEvent  {0xe1};
+     UInt32 keyEvent  {0xe2};
++    // 0 = not present in _WDG
++    UInt32 smartFanEvent {0};
++    UInt32 fanSettingEvent {0};
++    UInt32 chargeEvent {0};
++    UInt32 lightEvent {0};
++    UInt32 thermalEvent {0};
+ 
+     bool getGamzeZoneData(UInt32 query, UInt32 *result);
+ 
++    /**
++     *  Legion capabilities, probed once in processWMI
++     */
++    bool otherMethod {false};
++    bool smartFanCap {false};
++    bool touchpadCap {false};
++    bool winKeyCap {false};
++    bool overDriveCap {false};
++    bool iGPUModeCap {false};
++
++    /**
++     *  Where each sensor is read from, 0 = unavailable, else WMI method id
++     *  of LENOVO_OTHER_METHOD (capability) or LENOVO_GAMEZONE_DATA
++     */
++    UInt32 sensorSource[LEGION_SENSOR_COUNT] {};
++    bool sensorFromOther[LEGION_SENSOR_COUNT] {};
++    bool sensorsProbed {false};
++
++    /**
++     *  Evaluate a LENOVO_GAMEZONE_DATA method
++     *
++     *  @param method WmiMethodId
++     *  @param result integer result, may be nullptr
++     *  @param input argument, nullptr passes an integer 0 like the original YogaSMC code
++     */
++    IOReturn gameZoneCall(UInt32 method, UInt32 *result, OSObject *input = nullptr);
++
++    /**
++     *  LENOVO_OTHER_METHOD GetFeatureValue / SetFeatureValue
++     */
++    IOReturn getFeature(UInt32 id, UInt32 *value);
++    IOReturn setFeature(UInt32 id, UInt32 value);
++
++    /**
++     *  Read a state from LENOVO_GAMEZONE_DATA and publish it
++     */
++    bool publishState(const char *key, UInt32 method, bool asBoolean);
++
++    void updateLegion();
++    void updatePowerMode(bool notify);
++    void setPowerMode(UInt32 mode);
++    void setToggle(const char *key, UInt32 setMethod, UInt32 getMethod, bool enable);
++    void notifyLegion(UInt32 event, UInt32 data);
++
++    /**
++     *  Debug helpers, read only
++     */
++    void wmiQuery(OSDictionary *request);
++    void wmiBlock(OSDictionary *request);
++    void dumpACPI(OSObject *request);
++
++    virtual void setPropertiesGated(OSObject* props);
++
+ #ifndef ALTER
+     friend class IdeaSMC;
+ #endif
+@@ -217,6 +358,21 @@ class IdeaWMIGameZone : public YogaWMI
+     void processWMI() APPLE_KEXT_OVERRIDE;
+     void ACPIEvent(UInt32 argument) APPLE_KEXT_OVERRIDE;
+     const char* registerEvent(OSString *guid, UInt32 id) APPLE_KEXT_OVERRIDE;
++
++public:
++    virtual IOReturn setProperties(OSObject* props) APPLE_KEXT_OVERRIDE;
++
++    /**
++     *  Probe sensor sources (LENOVO_OTHER_METHOD capability like LLT on Gen 7+, Game Zone otherwise)
++     */
++    void probeSensors();
++
++    /**
++     *  Read one sensor, see LEGION_SENSOR_*
++     *
++     *  @return true if the sensor is available and the value plausible
++     */
++    bool readSensor(UInt32 sensor, UInt32 *value);
+ };
+ 
+ #endif /* IdeaWMI_hpp */
+diff --git a/YogaSMC/message.h b/YogaSMC/message.h
+index b219521..30f544c 100644
+--- a/YogaSMC/message.h
++++ b/YogaSMC/message.h
+@@ -87,7 +87,8 @@ enum
+     kSMC_YogaEvent          = iokit_vendor_specific_msg(501),   // set Yoga mode (data is UInt32*)
+     kSMC_FnlockEvent        = iokit_vendor_specific_msg(502),   // notify Fnlock event
+     kSMC_getConservation    = iokit_vendor_specific_msg(503),   // get conservation mode (data is bool*)
+-    kSMC_setConservation    = iokit_vendor_specific_msg(504)    // set conservation mode (data is bool*)
++    kSMC_setConservation    = iokit_vendor_specific_msg(504),   // set conservation mode (data is bool*)
++    kSMC_LegionEvent        = iokit_vendor_specific_msg(505)    // forward Legion Game Zone event (data is LegionEventMessage*)
+ };
+ 
+ // from VoodooPS2
+diff --git a/YogaSMCNC/AppDelegate.swift b/YogaSMCNC/AppDelegate.swift
+index a9f6adb..be4ee26 100644
+--- a/YogaSMCNC/AppDelegate.swift
++++ b/YogaSMCNC/AppDelegate.swift
+@@ -42,6 +42,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+     var fanHelper2: ThinkFanHelper?
+     var fanTimer: Timer?
+ 
++    // MARK: - Legion
++
++    var legionHelper: LegionHelper?
++
+     @objc func thinkWakeup() {
+         micMuteLEDHelper(conf.service)
+         muteLEDHelper(conf.service)
+@@ -103,6 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+             if self.fanHelper != nil {
+                 self.fanHelper!.update()
+             }
++            self.legionHelper?.update()
+         }
+     }
+ 
+@@ -271,6 +276,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+         case "IdeaVPC":
+             conf.events = ideaEvents
+             isOpen = registerNotification(&conf)
++            if !hide {
++                legionHelper = LegionHelper(appMenu, conf.service)
++            }
+         case "ThinkVPC":
+             conf.events = thinkEvents
+             isOpen = registerNotification(&conf)
+@@ -331,6 +339,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+             showOSD("Unknown Class", duration: 2000)
+         }
+         if isOpen { loadEvents(&conf) }
++        if legionHelper != nil {
++            // Fn+Q is reported by the Game Zone event with the new mode, hide the generic VPC prompt
++            for data: UInt32 in [0x01, 0x40] {
++                if let desc = conf.events[0x00]?[data], desc.action == .thermal {
++                    conf.events[0x00]?[data] = EventDesc(desc.name, act: .thermal, display: false)
++                }
++            }
++        }
+     }
+ 
+     func flagsCallBack(event: NSEvent) {
+diff --git a/YogaSMCNC/LegionHelper.swift b/YogaSMCNC/LegionHelper.swift
+new file mode 100644
+index 0000000..75080a5
+--- /dev/null
++++ b/YogaSMCNC/LegionHelper.swift
+@@ -0,0 +1,140 @@
++//
++//  LegionHelper.swift
++//  YogaSMCNC
++//
++//  Legion Game Zone controls (power mode, sensors, toggles), modelled on LenovoLegionToolkit.
++//  Talks to the IdeaWMIGameZone instance published by YogaSMC and to IdeaVPC for battery/keyboard.
++//
++
++import AppKit
++import os.log
++
++class LegionHelper {
++    let gameZone: io_service_t
++    let vpc: io_service_t
++    let menu: NSMenu
++    let modeItem: NSMenuItem
++    let modeMenu = NSMenu()
++    let tempItem: NSMenuItem
++    let fanItem: NSMenuItem
++    var toggles: [(item: NSMenuItem, key: String, service: io_service_t)] = []
++
++    // LENOVO_GAMEZONE_DATA SetSmartFanMode values (LLT PowerModeState + 1)
++    static let modes: [(value: Int, name: String)] = [
++        (1, "Quiet"), (2, "Balanced"), (3, "Performance"), (255, "Custom")
++    ]
++
++    static func modeName(_ value: Int) -> String {
++        if value == 224 { return "Extreme" }
++        return modes.first { $0.value == value }?.name ?? "Unknown (\(value))"
++    }
++
++    init?(_ menu: NSMenu, _ vpc: io_service_t) {
++        let service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IdeaWMIGameZone"))
++        guard service != 0 else {
++            if #available(macOS 10.12, *) {
++                os_log("IdeaWMIGameZone not found, Legion menu disabled", type: .info)
++            }
++            return nil
++        }
++        gameZone = service
++        self.vpc = vpc
++        self.menu = menu
++
++        let caps = getDictionary("Legion Capabilities", gameZone) as? [String: Bool] ?? [:]
++
++        modeItem = NSMenuItem(title: "Power Mode", action: nil, keyEquivalent: "")
++        tempItem = NSMenuItem(title: "CPU –  GPU –", action: nil, keyEquivalent: "")
++        fanItem = NSMenuItem(title: "Fans –", action: nil, keyEquivalent: "")
++
++        var index = 0
++        func add(_ item: NSMenuItem) {
++            menu.insertItem(item, at: index)
++            index += 1
++        }
++
++        if caps["PowerMode"] == true {
++            for mode in LegionHelper.modes {
++                let item = NSMenuItem(title: mode.name, action: #selector(setMode(_:)), keyEquivalent: "")
++                item.tag = mode.value
++                item.target = self
++                modeMenu.addItem(item)
++            }
++            modeItem.submenu = modeMenu
++            add(modeItem)
++        }
++        add(tempItem)
++        add(fanItem)
++        add(NSMenuItem.separator())
++
++        func addToggle(_ title: String, _ key: String, _ service: io_service_t) {
++            let item = NSMenuItem(title: title, action: #selector(toggle(_:)), keyEquivalent: "")
++            item.target = self
++            item.tag = toggles.count
++            toggles.append((item, key, service))
++            add(item)
++        }
++
++        let vpcProps = getProperties(vpc) ?? [:]
++        if vpcProps["ConservationMode"] != nil { addToggle("Battery Conservation (80%)", "ConservationMode", vpc) }
++        if vpcProps["RapidChargeMode"] != nil { addToggle("Rapid Charge", "RapidChargeMode", vpc) }
++        if vpcProps["FnlockMode"] != nil { addToggle("Fn Lock", "FnlockMode", vpc) }
++        if vpcProps["AlwaysOnUSBMode"] != nil { addToggle("Always-on USB", "AlwaysOnUSBMode", vpc) }
++        if caps["TouchpadLock"] == true { addToggle("Touchpad Lock", "TouchpadLock", gameZone) }
++        if caps["WinKeyLock"] == true { addToggle("Disable Win (⌘) Key", "WinKeyLock", gameZone) }
++        if caps["OverDrive"] == true { addToggle("Display Overdrive", "OverDrive", gameZone) }
++        add(NSMenuItem.separator())
++
++        update()
++    }
++
++    deinit {
++        IOObjectRelease(gameZone)
++    }
++
++    func update() {
++        _ = sendBoolean("UpdateSensors", true, gameZone)
++        _ = sendBoolean("Update", true, gameZone)
++
++        let mode = getNumber("PowerMode", gameZone)
++        if mode >= 0 {
++            modeItem.title = "Power Mode: \(LegionHelper.modeName(mode))"
++            for item in modeMenu.items {
++                item.state = item.tag == mode ? .on : .off
++            }
++        }
++
++        let sensors = getDictionary("Legion Sensors", gameZone) as? [String: Int] ?? [:]
++        var temps: [String] = []
++        if let cpu = sensors["CPU Temperature"] { temps.append("CPU \(cpu)°C") }
++        if let gpu = sensors["GPU Temperature"] { temps.append("GPU \(gpu)°C") }
++        if let pch = sensors["PCH Temperature"] { temps.append("PCH \(pch)°C") }
++        tempItem.title = temps.isEmpty ? "Temperatures unavailable" : temps.joined(separator: "  ")
++
++        var fans: [String] = []
++        if let cpu = sensors["CPU Fan"] { fans.append("CPU \(cpu)") }
++        if let gpu = sensors["GPU Fan"] { fans.append("GPU \(gpu)") }
++        fanItem.title = fans.isEmpty ? "Fan speed unavailable" : "Fans " + fans.joined(separator: "  ") + " rpm"
++
++        for entry in toggles {
++            entry.item.state = getBoolean(entry.key, entry.service) ? .on : .off
++        }
++    }
++
++    @objc func setMode(_ sender: NSMenuItem) {
++        if !sendNumber("PowerMode", sender.tag, gameZone) {
++            showOSDRaw("Power mode change failed")
++        }
++        update()
++    }
++
++    @objc func toggle(_ sender: NSMenuItem) {
++        guard sender.tag < toggles.count else { return }
++        let entry = toggles[sender.tag]
++        let target = entry.item.state != .on
++        if !sendBoolean(entry.key, target, entry.service) {
++            showOSDRaw("\(entry.item.title) failed")
++        }
++        update()
++    }
++}
+diff --git a/YogaSMCUtils/Configuration.swift b/YogaSMCUtils/Configuration.swift
+index 828b422..6c770e4 100644
+--- a/YogaSMCUtils/Configuration.swift
++++ b/YogaSMCUtils/Configuration.swift
+@@ -113,7 +113,21 @@ let ideaEvents: [UInt32: [UInt32: EventDesc]] = [
+         3: EventDesc("Stand Mode"),
+         4: EventDesc("Tent Mode")
+     ],
+-    0x11: [0: EventDesc("FnLock", act: .fnlock)]
++    0x11: [0: EventDesc("FnLock", act: .fnlock)],
++    // Legion Game Zone events forwarded by IdeaWMIGameZone (data = raw value)
++    0x20: [
++        0: EventDesc("Power Mode"),
++        1: EventDesc("Quiet Mode"),
++        2: EventDesc("Balanced Mode"),
++        3: EventDesc("Performance Mode"),
++        224: EventDesc("Extreme Mode"),
++        255: EventDesc("Custom Mode")
++    ],
++    0x21: [0: EventDesc("Thermal Mode", display: false)],
++    0x22: [0: EventDesc("Key Lock", display: false)],
++    0x23: [0: EventDesc("Charge Mode", display: false)],
++    0x24: [0: EventDesc("Light Profile", display: false)],
++    0x25: [0: EventDesc("Fan Setting", display: false)]
+ ]
+ 
+ let thinkEvents: [UInt32: [UInt32: EventDesc]] = [
+-- 
+2.39.5 (Apple Git-154)
+

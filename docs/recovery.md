@@ -9,6 +9,7 @@ The USB stick `1401` (FAT32) boots OpenCore. macOS mounts it at `/Volumes/1401` 
 | Boot hangs or needs debugging | `config-rgbfix.plist`: same setup with verbose boot and the picker |
 | Wi-Fi broken | `config-identity.plist` (itlwm, then open HeliPort) |
 | Identity or iServices problem | `config-fast-trackpad-gpio.plist` |
+| Boot fails or Lenovo features misbehave after the YogaSMC Legion build | `config-fastboot.plist`: same config with the stock YogaSMC 1.5.3 |
 | No desktop at all (graphics) | `config-safe-nvoff.plist`: Safe Mode with the NVIDIA driver off |
 | An older test config | `EFI-backup-oc105-20261008/OC/` on the stick has all of them |
 
