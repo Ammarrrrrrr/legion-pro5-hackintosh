@@ -41,7 +41,7 @@ SMCBatteryManager reports the battery normally. It sits at about 82% with "AC at
 
 ## Lenovo features (YogaSMC)
 
-`config.plist` loads **YogaSMC 1.6.2, a Legion build** of [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) (upstream master `299907b` plus three patches, kept in [`tools/yogasmc/`](../tools/yogasmc/); source and release zips in the private repository [YogaSMC-Legion](https://github.com/Ammarrrrrrr/YogaSMC-Legion)). Every other config still loads the stock 1.5.3 release.
+`config.plist` loads **YogaSMC 1.6.2, a Legion build** of [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) (upstream master `299907b` plus four patches, kept in [`tools/yogasmc/`](../tools/yogasmc/); source and release zips in the private repository [YogaSMC-Legion](https://github.com/Ammarrrrrrr/YogaSMC-Legion)). Every other config still loads the stock 1.5.3 release.
 
 ### Why stock YogaSMC wasn't enough
 

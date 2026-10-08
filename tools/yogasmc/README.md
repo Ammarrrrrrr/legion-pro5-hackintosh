@@ -1,10 +1,11 @@
 # YogaSMC Legion build
 
-Two patches for [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) master `299907b` (2024-05-05), applied in order:
+Patches for [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) master `299907b` (2024-05-05), applied in order:
 
 - `0001-Legion-Game-Zone-support.patch`: the Legion Game Zone features described in [docs/power-sleep.md](../../docs/power-sleep.md#lenovo-features-yogasmc), the menu bar section, and build scripts for the kext and the app that need only the Command Line Tools.
 - `0002-Pane-Legion-tab-rapid-charge-and-crash-fixes.patch`: the Legion tab in the System Settings pane, a fix for the pane crashing when it's opened a second time, rapid charge fixes, and `build-pane.sh`. Version 1.6.1.
 - `0003-Detect-power-modes-and-sensor-sources-per-model.patch`: power modes from the firmware (adds Extreme on this laptop), `LENOVO_FAN_METHOD` as a second sensor source, for other Legions. Version 1.6.2.
+- `0004-Pane-fit-five-power-modes.patch`: wider power mode control in the pane so all five modes fit. Part of release 1.6.2.
 
 The repository also has a README, `Tools/release.sh` and the release zips; the patches cover the driver, the apps and the build scripts.
 
@@ -16,7 +17,7 @@ The full source with history is the private repository [Ammarrrrrrr/YogaSMC-Legi
 git clone https://github.com/zhen-zen/YogaSMC ~/YogaSMC-Legion
 cd ~/YogaSMC-Legion
 git checkout -b legion 299907b
-git am /path/to/0001-*.patch /path/to/0002-*.patch /path/to/0003-*.patch
+git am /path/to/000[1-4]-*.patch
 git clone --depth 1 https://github.com/acidanthera/MacKernelSDK
 # Lilu-1.7.2-DEBUG.zip -> Lilu.kext, VirtualSMC-1.3.8-DEBUG.zip -> Kexts/VirtualSMC.kext, both into the repo root
 Tools/build-kext.sh 1.6.2      # -> build/Release/YogaSMC.kext

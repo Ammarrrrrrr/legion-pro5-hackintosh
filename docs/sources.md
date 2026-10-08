@@ -29,7 +29,7 @@ Every external component, where it came from and how it was verified. SHA-256 va
 |---|---|---|---|
 | VoodooGPIO with `VoodooGPIOAlderLakeS` (`INTC1085`) | https://github.com/victorwitkamp/VoodooGPIO | `b53f717` (2026-09-22) | `tools/trackpad/build-voodoogpio.sh` with acidanthera MacKernelSDK (master, cloned 2026-10-08) |
 | macserial | https://github.com/acidanthera/OpenCorePkg (`Utilities/macserial`) | `963025f` (2026-09-30) | `make` |
-| YogaSMC 1.6.2 Legion build (kext, YogaSMCNC app, YogaSMCPane) | https://github.com/zhen-zen/YogaSMC + the three patches in `tools/yogasmc/` | `299907b` (2024-05-05) | `Tools/build-kext.sh` / `build-app.sh` / `build-pane.sh` from the patches, with MacKernelSDK `3f75008` (2026-09-23) and the SDK kexts below; see [tools/yogasmc/](../tools/yogasmc/) |
+| YogaSMC 1.6.2 Legion build (kext, YogaSMCNC app, YogaSMCPane) | https://github.com/zhen-zen/YogaSMC + the four patches in `tools/yogasmc/` | `299907b` (2024-05-05) | `Tools/build-kext.sh` / `build-app.sh` / `build-pane.sh` from the patches, with MacKernelSDK `3f75008` (2026-09-23) and the SDK kexts below; see [tools/yogasmc/](../tools/yogasmc/) |
 | `yogactl`, `smckeys` | `tools/yogasmc/` | this repository | `clang` (see the README there) |
 
 ## Modified

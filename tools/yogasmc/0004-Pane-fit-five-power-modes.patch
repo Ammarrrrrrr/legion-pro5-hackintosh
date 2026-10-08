@@ -1,0 +1,53 @@
+From 084f209d69beecb9e8e0733d62e5cfaece4159fa Mon Sep 17 00:00:00 2001
+From: ammar <surfmemo58@gmail.com>
+Date: Fri, 9 Oct 2026 02:38:44 +0300
+Subject: [PATCH] Pane: fit five power modes (Extreme) without truncation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ YogaSMCPane/LegionSMCPane.swift | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/YogaSMCPane/LegionSMCPane.swift b/YogaSMCPane/LegionSMCPane.swift
+index b551adb..8f33f3a 100644
+--- a/YogaSMCPane/LegionSMCPane.swift
++++ b/YogaSMCPane/LegionSMCPane.swift
+@@ -79,7 +79,7 @@ class LegionPaneController: NSObject {
+         let label = NSTextField(wrappingLabelWithString: text)
+         label.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+         label.textColor = .secondaryLabelColor
+-        label.preferredMaxLayoutWidth = 280
++        label.preferredMaxLayoutWidth = 320
+         return label
+     }
+ 
+@@ -147,22 +147,22 @@ class LegionPaneController: NSObject {
+         right.addArrangedSubview(header("Sensors"))
+         right.addArrangedSubview(grid)
+         let sensorNote = note("Read from the EC through LENOVO_OTHER_METHOD, refreshed every 2 seconds while this tab is open. Also published as SMC keys for monitoring apps.")
+-        sensorNote.preferredMaxLayoutWidth = 230
++        sensorNote.preferredMaxLayoutWidth = 206
+         right.addArrangedSubview(sensorNote)
+         right.setHuggingPriority(.required, for: .vertical)
+ 
+         let columns = NSStackView(views: [left, right])
+         columns.orientation = .horizontal
+         columns.alignment = .top
+-        columns.spacing = 40
++        columns.spacing = 28
+         columns.translatesAutoresizingMaskIntoConstraints = false
+         root.addSubview(columns)
+         NSLayoutConstraint.activate([
+             columns.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+             columns.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
+             columns.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
+-            left.widthAnchor.constraint(equalToConstant: 290),
+-            right.widthAnchor.constraint(equalToConstant: 230),
++            left.widthAnchor.constraint(equalToConstant: 340),
++            right.widthAnchor.constraint(equalToConstant: 206),
+             grid.widthAnchor.constraint(equalTo: right.widthAnchor)
+         ])
+         return root
+-- 
+2.39.5 (Apple Git-154)
+
