@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.bootdmesg</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>mkdir -p /Library/Logs/bootdmesg; b=$(/usr/sbin/sysctl -n kern.boottime | sed -E 's/^\{ sec = ([0-9]+),.*/\1/'); for i in $(seq -w 1 25); do /sbin/dmesg &gt; /Library/Logs/bootdmesg/$b-$i.txt 2&gt;&amp;1; sleep 1; done</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>

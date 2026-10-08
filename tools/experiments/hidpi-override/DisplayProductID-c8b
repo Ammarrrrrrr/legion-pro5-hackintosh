@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>DisplayProductName</key>
+	<string>Legion 16 (HiDPI)</string>
+	<key>DisplayVendorID</key>
+	<integer>2533</integer>
+	<key>DisplayProductID</key>
+	<integer>3211</integer>
+	<key>scale-resolutions</key>
+	<array>
+		<data>AAAKAAAABkAAAAABACAAAA==</data>
+		<data>AAALQAAABwgAAAABACAAAA==</data>
+		<data>AAAMgAAAB9AAAAABACAAAA==</data>
+		<data>AAANIAAACDQAAAABACAAAA==</data>
+	</array>
+</dict>
+</plist>

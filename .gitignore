@@ -1,0 +1,12 @@
+# Never commit the real Mac identity (serial, MLB, UUID, ROM)
+identity.txt
+smbios/
+# Large downloads are referenced in docs/sources.md instead
+*.tar.gz
+*.zip
+*.dmg
+# Logs and macOS clutter
+opencore-*.txt
+*.log
+.DS_Store
+._*
