@@ -35,4 +35,5 @@
 17. **NullMoth update check:** packages 1.0.10 and 1.0.11 have byte-identical driver files, so no update.
 18. **RAM:** `SystemMemoryStatus Upgradable`.
 19. **Native Wi-Fi:** AirportItlwm 2.4.0-alpha (laobamac fork, Sequoia build, no root patches). Works.
-20. **This repository created.**
+20. **This repository created.** Pushed to a private GitHub repository.
+21. **Unused kexts removed:** six kexts that no config enabled, and the stock VoodooI2C after `config-safe-nvoff.plist` was switched to the working trackpad kexts.

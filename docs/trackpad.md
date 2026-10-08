@@ -63,7 +63,7 @@ Build it again:
 git clone https://github.com/victorwitkamp/VoodooGPIO.git      # commit b53f717
 git clone --depth 1 https://github.com/acidanthera/MacKernelSDK.git
 bash tools/trackpad/build-voodoogpio.sh VoodooGPIO MacKernelSDK out
-# -> out/VoodooGPIO.kext (org.coolstar.VoodooGPIO 1.1); copy into VoodooI2C.kext/Contents/PlugIns/
+# -> out/VoodooGPIO.kext (org.coolstar.VoodooGPIO 1.1); copy into VoodooI2C-RPL-GPIO.kext/Contents/PlugIns/
 ```
 
 ## Details

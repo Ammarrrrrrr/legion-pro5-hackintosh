@@ -9,4 +9,4 @@ Legion Pro 5 16IRX9 trackpad (Goodix GXTP5100, I2C5 = PCI 8086:7a7d, GPIO contro
   copy of the built plugin: VoodooGPIO-AlderLakeS-build.kext
 
 Configs (EFI/OC): config-fast-trackpad-gpio.plist = interrupt mode (the polling-only test config was removed),
-config-safe-nvoff.plist = Safe Mode recovery with stock VoodooI2C.
+config-safe-nvoff.plist = Safe Mode recovery, same trackpad kexts (stock VoodooI2C removed).

@@ -22,7 +22,7 @@
 | `config-airportitlwm.plist` | `config-identity.plist` + native Wi-Fi (AirportItlwm enabled, itlwm disabled) + `SystemMemoryStatus Upgradable` |
 | `config-identity.plist` | Previous everyday config: itlwm + HeliPort for Wi-Fi, own Mac identity |
 | `config-fast-trackpad-gpio.plist` | Like `config-identity.plist`, but without the Mac identity fix (`CustomSMBIOSGuid` off) |
-| `config-safe-nvoff.plist` | **Recovery:** Safe Mode (`-x`) + `-nvoff`. The NVIDIA driver doesn't load, giving an unaccelerated desktop to repair things from. |
+| `config-safe-nvoff.plist` | **Recovery:** Safe Mode (`-x`) + `-nvoff`. The NVIDIA driver doesn't load, giving an unaccelerated desktop to repair things from. Same kexts as `config-identity.plist`, so the trackpad works there too. |
 
 All five pass `ocvalidate` from OpenCore 1.0.8 with no issues. In this repository the identity values (`SystemSerialNumber`, `MLB`, `SystemUUID`, `ROM`) are OpenCore's sample placeholders.
 
@@ -74,11 +74,13 @@ UEFI drivers: `OpenRuntime`, `OpenCanopy`, `ResetNvramEntry` (all OpenCore 1.0.8
 | 15 | BlueToolFixup | 2.7.2 | ✅ | acidanthera BrcmPatchRAM |
 | 16 | BrightnessKeys | 1.0.4 | ✅ | acidanthera |
 | 17–20 | **VoodooI2C-RPL-GPIO** (+ VoodooGPIO, VoodooI2CServices, VoodooInput plugins) | 2.9.1 modified | ✅ | see [trackpad.md](trackpad.md) |
-| 24 | VoodooI2CHID | 1.0 (from VoodooI2C 2.9.1) | ✅ | |
-| 25, 27 | VoodooPS2Controller + VoodooPS2Keyboard | 2.3.8 | ✅ | acidanthera |
-| 35–36 | USBToolBox + UTBMap | 1.2.0 / 1.1 | ✅ | USBToolBox; UTBMap is the Legion EFI's port map |
-| 32 | itlwm | 2.3.0 | off | used before AirportItlwm, with HeliPort |
-| – | VoodooRMI, VoodooSMBus, VoodooPS2Mouse/Trackpad, WhateverGreen, XHCI-unsupported, NootedBlue, USBInjectAll | – | off | from the Legion EFI, not needed in Discrete mode |
+| 21 | VoodooI2CHID | 1.0 (from VoodooI2C 2.9.1) | ✅ | |
+| 22, 24 | VoodooPS2Controller + VoodooPS2Keyboard | 2.3.8 | ✅ | acidanthera |
+| 28–29 | USBToolBox + UTBMap | 1.2.0 / 1.1 | ✅ | USBToolBox; UTBMap is the Legion EFI's port map |
+| 27 | itlwm | 2.3.0 | off | used before AirportItlwm, with HeliPort |
+| 23, 25–26 | VoodooInput, VoodooPS2Mouse, VoodooPS2Trackpad (plug-ins inside VoodooPS2Controller) | 2.3.8 | off | not needed with the I2C trackpad |
+
+**Removed on 2026-10-08:** VoodooRMI, VoodooSMBus, WhateverGreen, XHCI-unsupported, NootedBlue, USBInjectAll and the stock VoodooI2C. They came with the Legion EFI. The first six were off in every config and aren't needed in Discrete mode. The stock VoodooI2C was only used by `config-safe-nvoff.plist`, which now uses VoodooI2C-RPL-GPIO like the other configs. Copies are in `EFI-backup-oc105-20261008` on the stick.
 
 The **NullMoth** kexts are not in the EFI. They're installed into `/Library/Extensions` and load from macOS's Auxiliary Kernel Collection (see [nvidia-nullmoth.md](nvidia-nullmoth.md)).
 
