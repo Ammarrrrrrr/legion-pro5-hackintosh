@@ -5,7 +5,7 @@ Two patches for [zhen-zen/YogaSMC](https://github.com/zhen-zen/YogaSMC) master `
 - `0001-Legion-Game-Zone-support.patch`: the Legion Game Zone features described in [docs/power-sleep.md](../../docs/power-sleep.md#lenovo-features-yogasmc), the menu bar section, and build scripts for the kext and the app that need only the Command Line Tools.
 - `0002-Pane-Legion-tab-rapid-charge-and-crash-fixes.patch`: the Legion tab in the System Settings pane, a fix for the pane crashing when it's opened a second time, rapid charge fixes, and `build-pane.sh`. Version 1.6.1.
 
-The working tree on this machine is `~/YogaSMC-Legion` (branch `legion`, local only).
+The full source with history is the private repository [Ammarrrrrrr/YogaSMC-Legion](https://github.com/Ammarrrrrrr/YogaSMC-Legion) (`~/YogaSMC-Legion`, branch `main`). Built files: its [v1.6.1 release](https://github.com/Ammarrrrrrr/YogaSMC-Legion/releases/tag/v1.6.1). The patches here are kept as a self-contained copy.
 
 ## Build
 
